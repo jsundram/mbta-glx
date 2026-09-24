@@ -42,6 +42,50 @@ Magoun, MBTA LAMP. Re-fit per GTFS rating; **Fall 2026 runs Sep 2 – Dec 12**.
 
 ---
 
+## Decisions made (2026-09-24)
+
+1. **Notification budget: 4 normal, 6 worst case.** Two per train (leave / adjust),
+   covering the target train plus the one before it as the safety option; the extra
+   pair is the recovery train if the target is missed.
+2. **The rider picks the train.** The system proposes, you commit. The commit is
+   also what arms the adjust-notification — see the open question below.
+3. **Confidence is adjustable in the app**, with the real trade shown (below).
+4. **One-offs, no recurring rules.** Destination and deadline change day to day.
+
+---
+
+## What "90% confident" actually buys  (measured, not asserted)
+
+Monte Carlo over the measured schedule deviation, the 9.6% no-show rate, headway,
+and the real Magoun→destination ride (`src/confidence.py`). Destination Park St:
+
+| target | leave this early | if late: median | if late: p90 |
+|---|---|---|---|
+| 50% | 2.1 min | 3.3 min | 12.1 min |
+| 75% | 5.4 min | 3.8 min | 12.5 min |
+| **90%** | **10.4 min** | 3.7 min | 12.6 min |
+| 95% | 14.1 min | 3.9 min | 12.6 min |
+| 99% | 23.0 min | 3.7 min | 12.9 min |
+
+**Raising confidence does not make you less late — it makes you late less often.**
+The lateness column is flat at ~4 min median / ~12.6 min p90 across every target,
+and holds for North Station and Copley too. That is because lateness is dominated by
+the discrete event of missing a train, which costs a whole headway (8.8 min) no
+matter how much buffer you left.
+
+So the app's confidence control means exactly one thing: **how many minutes of
+boredom you buy to reduce how often you are late.** Concretely —
+
+- 90% → 95% costs **3.7 min** of extra daily buffer to halve the late rate.
+- 95% → 99% costs **8.9 min** more to go from 1-in-20 to 1-in-100.
+- When you *are* late, expect ~4 min; the bad day is ~13 min. That never improves.
+
+The UI should say this in the rider's terms, e.g. *"late about one morning a
+fortnight, usually by about 4 minutes"* — a frequency and a magnitude, not a
+percentage.
+
+---
+
 ## Phase 0 — Stop losing data  ◀ urgent, irreversible
 
 - [x] `src/snapshot_schedule.py` — daily Green-E inbound schedule, all 26 stops,
@@ -52,12 +96,37 @@ Magoun, MBTA LAMP. Re-fit per GTFS rating; **Fall 2026 runs Sep 2 – Dec 12**.
 - [x] `src/rollup.py` — distil to (prediction, outcome) pairs, 20× compression
       (13.8 MB/day raw → 0.68 MB/day kept), prune raw after 14 days.
 - [x] `src/daily.sh` + `ops/*.plist` — launchd agents, generated.
-- [ ] **Install the agents**: `./ops/install.sh` (needs your approval — installs two
-      `~/Library/LaunchAgents` entries that run at login and survive reboot).
-- [ ] `git init` + first commit. Nothing is version-controlled yet.
+- [x] **Agents installed** — `com.magoun.archiver` (KeepAlive) and
+      `com.magoun.daily` (11:30 / 21:30) are loaded and running.
+- [x] `git init` + first commit.
 
 **Acceptance:** archiver survives a reboot; `data/sched_full/` gains a file every
 day without intervention; `data/pairs/` gains a file for each completed day.
+
+### Runbook — changing what the agents capture
+
+The agents will need updating whenever we capture more fields, more stops, or store
+things differently. Expect this at least at Phase 3 (journey model needs downstream
+stops) and whenever a GTFS rating turns over.
+
+```bash
+# 1. change src/record_rt.py (or snapshot_schedule.py / rollup.py)
+# 2. reload -- edits are NOT picked up automatically, the archiver is long-running
+./ops/install.sh          # idempotent: bootout then bootstrap, safe to re-run
+launchctl list | grep magoun
+tail -f data/live/archiver.err
+```
+
+**Schema changes must be additive.** `rollup.py` reads every archived day, including
+ones written by older code, so never rename or repurpose a field — add a new one and
+leave old records missing it. `data/pairs/*.parquet` is the long-term store; if its
+schema must change, re-derive from raw within the 14-day prune window or the old
+shape is permanent.
+
+**Storage note:** the project lives in Dropbox, so data durability is handled, but
+the raw archive churns **13.8 MB/day** through sync. The 14-day prune holds it at
+~190 MB steady state. If Dropbox sync becomes a problem, move `data/raw/` and
+`data/live/` outside the Dropbox tree — nothing in git depends on their location.
 
 ---
 
@@ -147,31 +216,74 @@ a 6-minute cushion at Park St has a ±3.6 min tail on it.
 - [ ] **Suppression** — no notification while the do-not-leave floor holds
       (nothing berthed ⇒ ≥ 240 s clear at 99.5%).
 
-### Open questions — need your call
-1. **Notification budget.** Your sketch says "notify me about all trains from
-   [time0]". At 8.8 min headway that is 3–4 pushes. Cap at 2 (leave + adjust) with a
-   third only on recovery?
-2. **Who chooses the train** — does it pick one, or present options and let you
-   commit? Committing makes the recovery path much better.
-3. **Confidence target.** 90% on-time at destination is the natural default. Higher
-   means leaving meaningfully earlier.
-4. **Recurring rules** ("weekdays, Park St by 9:00") or one-off each day?
+### Open question — how does it know you left?
+
+The adjust ("start jogging") notification needs a reference point. Three options:
+
+1. **Assume you left at the leave-now time.** Zero friction, wrong whenever you
+   dawdle — and dawdling is exactly when you need the nudge.
+2. **Tap to confirm** on the leave-now push. One tap, and it doubles as the commit
+   from decision 2. Probably the right default.
+3. **Location.** Accurate, no friction, but needs the native app from 5c.
+
+Start with (2), since committing to a train is already the interaction.
 
 ---
 
 ## Phase 5 — Delivery
 
-- [ ] Pick a channel. **ntfy.sh or Pushover ≈ 1 hour**; APNs ≈ days. Not yet decided,
-      and it constrains Phase 4.
+### The real question is *where it runs*, not which channel
+
+The notifier must fire at ~08:04 with ~30 s precision. That is a scheduling problem
+before it is a notification problem.
+
+| host | fires reliably at 08:04? | cost | notes |
+|---|---|---|---|
+| **This Mac** (today) | **No** | £0 | macOS sleeps. `launchd` runs a missed job *on wake*, which is far too late. `caffeinate`/`pmset repeat wake` can force it but is fragile and keeps the machine up. |
+| Raspberry Pi on the LAN | Yes | ~$50 once | Always on, quiet, keeps data at home. Another box to maintain. |
+| Small VPS / fly.io | Yes | $0–5/mo | Most reliable. Needs the archiver + model deployed off-Mac. |
+| GitHub Actions cron | **No** | £0 | 5-min granularity and routinely 5–15 min late. Fine for the daily rollup, useless for a leave-now trigger. |
+| AWS Lambda + EventBridge | Yes | pennies | 1-min granularity, reliable. Most moving parts. |
+
+**This is the first thing to settle in Phase 5.** A perfect notification that fires
+after a sleeping Mac wakes up is worth nothing. Note the split: the *archiver* is
+already fine on the Mac (gaps during sleep cost a little data, not a missed train),
+but the *trigger* is not.
+
+### Channel, once hosting is settled
+
+| channel | effort | pierces Do Not Disturb | countdown on lock screen | cost |
+|---|---|---|---|---|
+| **ntfy.sh** | ~1 h | no | no | free |
+| **Pushover** | ~2 h | yes (priority 2) | no | $5 once |
+| Telegram bot | ~1 h | no | no | free |
+| **Native iOS app + APNs** | days–weeks | yes | **yes (Live Activity)** | $99/yr |
+
+**The "start jogging" trigger has a quality ceiling on the cheap options.** A
+countdown that updates on the lock screen is an iOS Live Activity, which requires a
+real app. Everything else can only send discrete pushes — "train in 90 s" once,
+with no live tick.
+
+Recommended ladder, each step only if the previous proves useful:
+
+- [ ] **5a — ntfy, on whatever host.** Proves the whole loop end to end for an hour
+      of work. Discrete pushes only. Do this first regardless of the endpoint.
+- [ ] **5b — Pushover** if leave-now needs to pierce Do Not Disturb (it probably
+      does — a silenced 08:04 alert is a missed train).
+- [ ] **5c — native app with a Live Activity** only if this earns a place in the
+      daily routine. That is the version that actually delivers the countdown.
+
+### Also in Phase 5
+
 - [ ] Scheduler that arms watches from the day's brief and fires triggers.
 - [ ] Health check: the archiver dying silently is the top failure mode — during
-      this build two recorders ran simultaneously unnoticed.
+      this build two recorders ran simultaneously unnoticed for 20 minutes.
 
 ---
 
 ## Engineering debt (Phase 3 of your plan, made concrete)
 
-- [ ] `git init` — nothing is versioned.
+- [x] `git init` — done; data excluded via `.gitignore`, Dropbox covers durability.
 - [ ] Tests for the logic that has already produced silent bugs: epoch µs-vs-s,
       stale vehicle→leg links, quantile-vs-median mixing, parked-train ghosts.
       Every one of these was caught by chance, not by a check.
