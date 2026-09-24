@@ -229,6 +229,21 @@ usually *exactly one*, and the notifier should say which.
 Note the shape change from the original sketch: **confidence, not "minutes early"** —
 a 6-minute cushion at Park St has a ±3.6 min tail on it.
 
+### Revisions
+
+An ETA that moves must **say so**, repeatedly, rather than the system quietly
+re-deciding. Any move of 90 s or more is announced (no more often than every 90 s,
+so revisions cannot spam), and the sequence a rider should see is:
+
+> Your train may be running late — now expected 5:19
+> Updated arrival time — now expected 5:11
+> Updated arrival time — now expected 5:13
+
+Critically, a commitment is **no longer dropped** when the match is lost. After the
+240 s debounce the best candidate is adopted *and announced*, because a flap of one
+headway is indistinguishable from a no-show, and following the wrong train loudly
+beats abandoning the right one silently.
+
 ### Triggers
 - [ ] **Leave now** — fires once, at the q10 departure time for the chosen train.
 - [ ] **Start jogging / ease up** — mid-walk, ~3 min in, when the train clears
@@ -270,6 +285,18 @@ The adjust ("start jogging") notification needs a reference point. Three options
 Start with (2), since committing to a train is already the interaction.
 
 ---
+
+## Status board
+
+`http://localhost:8723/board` — one screen, no interaction: next train in MM:SS, or
+"train at the station" with dwell time and lateness against the timetable. Ticks
+locally at 250 ms between 5 s polls so the countdown is smooth, keeps painting from
+the last good reading when the server is unreachable (and marks itself stale), and
+self-reloads when the server restarts with new code.
+
+Built as a debugging surface as much as a product: the failure modes in this
+project are all *temporal*, and watching predictions move in real time makes them
+obvious in a way that reading logs after the fact does not.
 
 ## Phase 5 — Delivery
 

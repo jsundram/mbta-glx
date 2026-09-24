@@ -86,6 +86,36 @@ class Model:
         return self.m["headway_median_s"]
 
 
+class ArrivalTracker:
+    """When each train first appeared stopped at a platform.
+
+    The vehicle feed refreshes a stopped train's timestamp, so it cannot say when
+    the train got there; that has to be observed across polls.
+    """
+
+    def __init__(self):
+        self.at: dict[str, float] = {}      # vehicle -> first seen stopped here
+        self.recent: list[float] = []       # arrival times, newest last
+
+    def update(self, snap: dict, stop: str = MAGOUN_IN, direction: int = 0) -> dict:
+        now, here = snap["t"], {}
+        for v in snap["vehicles"]:
+            a, rel = v["attributes"], v["relationships"]
+            if not _live(a, now) or a["direction_id"] != direction:
+                continue
+            if (rel["stop"]["data"] or {}).get("id") != stop:
+                continue
+            if a["current_status"] != "STOPPED_AT":
+                continue
+            if v["id"] not in self.at:
+                self.at[v["id"]] = now
+                self.recent.append(now)
+                del self.recent[:-12]
+            here[v["id"]] = self.at[v["id"]]
+        self.at = {k: t for k, t in self.at.items() if k in here}
+        return here
+
+
 class BerthTracker:
     """Remembers when each train first appeared on the Medford/Tufts inbound platform.
 

@@ -30,7 +30,9 @@ WIDE = 900           # fallback window: MBTA predictions flap by several minutes
 # is deliberately generous -- a true no-show is still caught minutes before the
 # rider would need to leave.
 MISS_TICKS = 12      # ~240 s of consecutive misses before declaring a no-show
-DRIFT_ALERT = 240    # tell the rider once their train slips this far
+DRIFT_ALERT = 240    # first "running late" alert once the train slips this far
+REVISE_BY = 90       # announce a new ETA once it moves this far from the last one
+REVISE_GAP = 90      # ...but no more often than this, so revisions cannot spam
 ADJUST_SOURCES = ("departed Medford/Tufts", "departed Ball Sq")
 
 
@@ -186,17 +188,13 @@ class Watcher:
             com["target_eta"] = row["eta"]
             if row.get("vehicle"):
                 com["vehicle"] = row["vehicle"]
-            # A train slipping several minutes changes the rider's plan; say so once.
+            # Keep the rider current: any material ETA move gets announced, both
+            # ways, for as long as it keeps moving.
             slip = row["eta"] - com.get("original_eta", row["eta"])
-            if slip >= DRIFT_ALERT and not p["fired"].get("slip"):
-                notify.send(
-                    "Your train is running late",
-                    f"Now {fmt(row['eta'])} ({slip/60:+.0f} min). "
-                    f"Leave {fmt(row['lo'] - p['walk'])}.",
-                    priority=3, tags=["hourglass"],
-                    actions=[notify.reply_action("Show options", "brief")])
-                p["fired"]["slip"] = True
-                log(f"fired SLIP alert: {slip/60:+.1f} min")
+            if com.get("announced_eta") is not None:
+                self._announce(p, row, now, "Updated arrival time")
+            elif slip >= DRIFT_ALERT:
+                self._announce(p, row, now, "Your train is running late")
 
             leave_by = row["lo"] - p["walk"]
             now = snap["t"]
@@ -229,6 +227,50 @@ class Watcher:
                 p["fired"]["adjust"] = True
                 log(f"fired ADJUST slack={slack:+.0f}s via {row['source']}")
             save(p)
+
+    def _announce(self, p: dict, row: dict, now: float, why: str) -> None:
+        """Tell the rider the ETA moved. Revisions continue for as long as it keeps
+        moving -- a silently changing plan was the original sin here."""
+        com = p["committed"]
+        last = com.get("announced_eta", com.get("original_eta"))
+        since = now - com.get("announced_at", 0)
+        if abs(row["eta"] - last) < REVISE_BY or since < REVISE_GAP:
+            return
+        delta = row["eta"] - com.get("original_eta", row["eta"])
+        notify.send(
+            why,
+            f"Now expected {fmt(row['eta'])} ({delta/60:+.0f} min vs your pick) · "
+            f"+/-{(row['hi']-row['lo'])/2:.0f}s · leave {fmt(row['lo'] - p['walk'])}",
+            priority=3, tags=["hourglass"],
+            actions=[notify.reply_action("Show options", "brief")])
+        com["announced_eta"] = row["eta"]
+        com["announced_at"] = now
+        log(f"announced revision -> {fmt(row['eta'])} ({delta/60:+.1f} min)")
+
+    def _uncertain(self, p: dict, rows: list, snap: dict) -> None:
+        """Nothing matched for MISS_TICKS. Adopt the best candidate and SAY SO.
+
+        The commitment is not dropped: a flap of about one headway looks exactly
+        like a no-show, and dropping it silently is worse than following the wrong
+        train loudly. Revisions keep flowing, so a train that comes back gets
+        announced right after.
+        """
+        com = p["committed"]
+        cand = [r for r in rows if r["eta"] > snap["t"] + p["walk"] * 0.5]
+        if not cand:
+            if not p["fired"].get("recover"):
+                notify.send("No train predicted", "Nothing upstream for your deadline.",
+                            priority=5, tags=["warning"])
+                p["fired"]["recover"] = True
+                save(p)
+            return
+        row = min(cand, key=lambda r: abs(r["eta"] - com["target_eta"]))
+        com["target_eta"] = row["eta"]
+        com["vehicle"] = row.get("vehicle") or com.get("vehicle")
+        com["misses"] = 0
+        log(f"adopted {fmt(row['eta'])} after {MISS_TICKS} misses")
+        self._announce(p, row, snap["t"], "Your train may be running late")
+        save(p)
 
     def _recover(self, p: dict, rows: list, snap: dict) -> None:
         if p["fired"].get("recover"):

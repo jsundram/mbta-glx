@@ -10,9 +10,17 @@ error bars*, and sharpens them as trains move.
 ## Run it
 
 ```bash
-uv run --with polars python src/server.py 8723   # http://localhost:8723/?walk=6
+uv run --with polars python src/server.py 8723   # then open:
+#   http://localhost:8723/board       live status board, self-updating
+#   http://localhost:8723/?walk=6     ETAs with leave-by times
 uv run python src/service.py 6                   # one-shot CLI, 6-minute walk
 ```
+
+**The board** answers one question at a glance: *next train expected in MM:SS*, or
+*train at the station* with how long it has been there and how late it is against
+the timetable. It ticks locally every 250 ms and re-polls every 5 s, so the
+countdown stays smooth even between polls, and it reloads itself when the server
+restarts with new code — you never need to refresh by hand.
 
 Set `MBTA_API_KEY` (free, from api-v3.mbta.com) to lift the keyless rate limit.
 

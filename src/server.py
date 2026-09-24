@@ -19,8 +19,10 @@ CACHE_TTL = 10.0
 
 _model = service.Model()
 _berths = service.BerthTracker()
+_arrivals = service.ArrivalTracker()
+VERSION = str(int(time.time()))     # changes on restart so open pages self-reload
 _lock = threading.Lock()
-_cache: dict = {"t": 0.0, "snap": None, "berths": {}}
+_cache: dict = {"t": 0.0, "snap": None, "berths": {}, "here": {}}
 
 
 def current_snapshot() -> tuple[dict, dict]:
@@ -30,8 +32,13 @@ def current_snapshot() -> tuple[dict, dict]:
             snap = service.snapshot()
             _cache["snap"] = snap
             _cache["berths"] = _berths.update(snap)
+            _cache["here"] = _arrivals.update(snap)
             _cache["t"] = time.time()
         return _cache["snap"], _cache["berths"]
+
+
+def _nearest_scheduled(t: float, slots: list[float]) -> float | None:
+    return min(slots, key=lambda s: abs(s - t)) if slots else None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -56,6 +63,39 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:  # noqa: BLE001
                 self._send(503, "application/json",
                            json.dumps({"error": str(e)}).encode())
+        elif u.path == "/status":
+            try:
+                snap, berths = current_snapshot()
+                rows = service.etas(snap, _model, 0, berths=berths)
+                now = snap["t"]
+                slots = service.schedule_today(
+                    __import__("datetime").datetime.fromtimestamp(now, service.TZ).date())
+                here = []
+                for vid, since in _cache.get("here", {}).items():
+                    sched = _nearest_scheduled(since, slots)
+                    here.append({"vehicle": vid, "since": since,
+                                 "dwell_s": now - since,
+                                 "late_s": (since - sched) if sched else None})
+                nxt = next((r for r in rows if r["eta"] > now), None)
+                body = json.dumps({
+                    "now": now, "version": VERSION,
+                    "at_station": here,
+                    "next": {"eta": nxt["eta"], "lo": nxt["lo"], "hi": nxt["hi"],
+                             "source": nxt["source"], "backed": nxt["backed"]}
+                    if nxt else None,
+                    "following": [{"eta": r["eta"], "source": r["source"]}
+                                  for r in rows[1:4]],
+                    "upstream": service.upstream_state(snap),
+                    "recent": _arrivals.recent[-5:],
+                    "headway_median_s": _model.headway,
+                }).encode()
+                self._send(200, "application/json", body)
+            except Exception as e:  # noqa: BLE001
+                self._send(503, "application/json",
+                           json.dumps({"error": str(e)}).encode())
+        elif u.path == "/board":
+            self._send(200, "text/html; charset=utf-8",
+                       (ROOT / "src" / "status.html").read_bytes())
         elif u.path in ("/", "/index.html"):
             self._send(200, "text/html; charset=utf-8", PAGE.read_bytes())
         else:
