@@ -136,3 +136,21 @@ def test_resolve_rejects_unknown_and_accepts_substring():
         assert "Known:" in str(e)
     else:
         raise AssertionError("unknown destination should raise")
+
+
+# --- bug: 80 s debounce fired inside a 90 s prediction flap ---
+
+def test_debounce_outlasts_observed_prediction_flap():
+    """Two live flaps lasted 90 s each; the debounce must ride them out."""
+    observed_flap_s = 90
+    assert watch.MISS_TICKS * watch.TICK > observed_flap_s * 1.5, (
+        f"debounce {watch.MISS_TICKS * watch.TICK}s is too short for a "
+        f"{observed_flap_s}s flap")
+
+
+def test_vehicle_identity_survives_a_headway_sized_jump():
+    """A latched vehicle must be followed however far its prediction flaps."""
+    committed = {"target_eta": 1000.0, "vehicle": "G-10065"}
+    rows = [row(1000 + 480, vehicle="G-10065")]     # +8 min, as observed live
+    got = watch.match_target(rows, committed, HEADWAY)
+    assert got is not None and got["vehicle"] == "G-10065"

@@ -382,12 +382,18 @@ timed pushes ("train in 2 min" / "1 min" / "now") approximate a ticking countdow
   a whole day records only each vehicle's first visit; trains cycle through Magoun
   repeatedly, measured at a **30% undercount over three hours**. This corrupted the
   prediction-error calibration until fixed.
-- **MBTA predictions flap by minutes, not seconds.** Observed live on 2026-09-24:
-  a Magoun inbound prediction went 16:23 → 16:31 → 16:23 inside 90 seconds. Any
-  logic that tracks "the train I committed to" must debounce — the first version
-  fired a false "that train vanished" on a single bad tick. Now: re-match at ±300 s,
-  fall back to ±900 s, and require 4 consecutive misses (80 s) before declaring a
-  no-show.
+- **MBTA predictions flap by ~8 minutes for ~90 seconds.** Measured twice on
+  2026-09-24: `16:23 → 16:31 → 16:23` and `17:19 → 17:11`, both about 90 s long,
+  both the same vehicle throughout. Consequences, each learned the hard way:
+  - A single bad tick must not trigger anything (first false recovery).
+  - The debounce must be **longer than the flap**. An 80 s debounce fired 25 s
+    before the feed corrected itself. Now 12 ticks ≈ 240 s.
+  - The re-match window must never reach the next train (headway 528 s), or the
+    commitment silently slides forward and leave-now never fires.
+  - **A flap of one headway is indistinguishable from a no-show by timing alone.**
+    Only the vehicle id separates them. When the commitment came from a schedule
+    row there is no vehicle yet, so this case cannot be resolved — the notifier
+    therefore *asks* ("your train may be running late") rather than asserting.
 
 - **Parked trains.** An out-of-service train sat berthed 8+ hours with a frozen
   `updated_at`; it faked a train upstream and silently disabled the no-show veto.

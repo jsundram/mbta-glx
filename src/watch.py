@@ -25,7 +25,11 @@ TICK = 20.0
 WALK = int(os.environ.get("MAGOUN_WALK_S", "390"))
 MATCH = 300          # normal re-match window for a committed train
 WIDE = 900           # fallback window: MBTA predictions flap by several minutes
-MISS_TICKS = 4       # consecutive failed matches before declaring a no-show
+# Observed flap durations: 90 s (16:23->16:31->16:23) and 90 s (17:19->17:11).
+# A debounce shorter than the flap turns feed noise into a false no-show, so this
+# is deliberately generous -- a true no-show is still caught minutes before the
+# rider would need to leave.
+MISS_TICKS = 12      # ~240 s of consecutive misses before declaring a no-show
 DRIFT_ALERT = 240    # tell the rider once their train slips this far
 ADJUST_SOURCES = ("departed Medford/Tufts", "departed Ball Sq")
 
@@ -233,12 +237,18 @@ class Watcher:
                              self.model, snap, self.berths.seen)
         nxt = next((o for o in opts if o["catchable"]), None)
         if nxt:
+            # It may be the same train running late -- the feed cannot distinguish
+            # that from a no-show when the gap is about one headway. Ask.
+            gap = nxt["eta"] - p["committed"]["target_eta"] if p.get("committed") else 0
+            same_ish = 0 < gap < self.model.headway * 1.5
+            head = "Your train may be running late" if same_ish else "That train vanished"
             notify.send(
-                "That train vanished",
-                f"Next is {fmt(nxt['eta'])} · {nxt['p_ontime']:.0%} for "
+                head,
+                f"Best now is {fmt(nxt['eta'])} · {nxt['p_ontime']:.0%} for "
                 f"{fmt(p['deadline'])} · leave {fmt(nxt['leave_by'])}",
                 priority=5, tags=["warning"],
-                actions=[notify.reply_action("Take it", "pick 0")])
+                actions=[notify.reply_action("Track it", "pick 0"),
+                         notify.reply_action("Show options", "brief")])
             p["options"] = [{"eta": o["eta"], "p": o["p_ontime"]} for o in opts[:3]]
         else:
             notify.send("That train vanished", "No good option left for your deadline.",
