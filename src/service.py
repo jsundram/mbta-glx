@@ -29,6 +29,18 @@ ROOT = pathlib.Path(os.environ.get("MAGOUN_ROOT",
                                    pathlib.Path(__file__).resolve().parent.parent))
 TZ = ZoneInfo("America/New_York")   # must be a real zone: EDT->EST flips 2026-11-01
 MAGOUN_IN, BALL_IN, MED_IN, MED_OUT = "70508", "70510", "70512", "70511"
+# The GLX, ordered Medford/Tufts -> Lechmere. Inbound trains run down this list,
+# outbound trains run up it, and both share the terminus at the top.
+GLX_STOPS = [
+    ("Medford/Tufts", "70512", "70511"),
+    ("Ball Square", "70510", "70509"),
+    ("Magoun Square", "70508", "70507"),
+    ("Gilman Square", "70506", "70505"),
+    ("East Somerville", "70514", "70513"),
+    ("Lechmere", "70502", "70501"),
+]
+IN_IDX = {sid: i for i, (_, sid, _) in enumerate(GLX_STOPS)}
+OUT_IDX = {sid: i for i, (_, _, sid) in enumerate(GLX_STOPS)}
 DEFAULT_WALK_ENV = int(os.environ.get("MAGOUN_WALK_S", "390"))
 KEY = os.environ.get("MBTA_API_KEY")
 VETO_WINDOW = 480        # a scheduled train this close with nothing upstream is a no-show
@@ -93,27 +105,47 @@ class ArrivalTracker:
     the train got there; that has to be observed across polls.
     """
 
+    GRACE = 75.0     # a vehicle missing from one poll has not necessarily left
+
     def __init__(self):
-        self.at: dict[str, float] = {}      # vehicle -> first seen stopped here
-        self.recent: list[float] = []       # arrival times, newest last
+        self.at: dict[str, float] = {}       # vehicle -> when it arrived
+        self.seen: dict[str, float] = {}     # vehicle -> last poll that saw it here
+        self.recent: list[float] = []        # arrival times, newest last
 
     def update(self, snap: dict, stop: str = MAGOUN_IN, direction: int = 0) -> dict:
-        now, here = snap["t"], {}
+        """Which trains are stopped here, and since when.
+
+        Deliberately tolerant: a stopped train's position can go stale or drop out
+        of a single poll, and treating that as a departure made the dwell counter
+        reset to zero and then jump. A vehicle is only considered gone once it has
+        been unseen for GRACE seconds; liveness is not required to KEEP a train
+        that is already known to be sitting here, only to start counting one.
+        """
+        now = snap["t"]
         for v in snap["vehicles"]:
             a, rel = v["attributes"], v["relationships"]
-            if not _live(a, now) or a["direction_id"] != direction:
-                continue
-            if (rel["stop"]["data"] or {}).get("id") != stop:
-                continue
-            if a["current_status"] != "STOPPED_AT":
+            at_our_stop = (a["direction_id"] == direction
+                           and (rel["stop"]["data"] or {}).get("id") == stop
+                           and a["current_status"] == "STOPPED_AT")
+            if not at_our_stop:
+                # Seen somewhere else, so it has definitely left. Grace applies only
+                # to vehicles missing from the feed entirely, not to ones we can see.
+                self.at.pop(v["id"], None)
+                self.seen.pop(v["id"], None)
                 continue
             if v["id"] not in self.at:
+                if not _live(a, now):
+                    continue                    # do not start counting on a ghost
                 self.at[v["id"]] = now
                 self.recent.append(now)
                 del self.recent[:-12]
-            here[v["id"]] = self.at[v["id"]]
-        self.at = {k: t for k, t in self.at.items() if k in here}
-        return here
+            self.seen[v["id"]] = now
+        for vid, last in list(self.seen.items()):
+            if now - last > self.GRACE:
+                self.at.pop(vid, None)
+                self.seen.pop(vid, None)
+        # Stable order: oldest arrival first, so the display never swaps trains.
+        return dict(sorted(self.at.items(), key=lambda kv: kv[1]))
 
 
 class BerthTracker:
@@ -182,6 +214,33 @@ def snapshot() -> dict:
         "sort": "arrival_time"})
     veh = _get("vehicles", {"filter[route]": "Green-B,Green-C,Green-D,Green-E"})
     return {"t": time.time(), "preds": preds["data"], "vehicles": veh["data"]}
+
+
+def line_map(snap: dict) -> list[dict]:
+    """Where every Green Line train sits on the GLX, as a fractional stop index.
+
+    A train IN_TRANSIT_TO / INCOMING_AT a stop is drawn half a segment before it,
+    which is what makes the map read as movement rather than a row of dots.
+    """
+    out = []
+    for v in snap["vehicles"]:
+        a, rel = v["attributes"], v["relationships"]
+        stop = (rel["stop"]["data"] or {}).get("id")
+        if stop is None:
+            continue
+        inbound = a["direction_id"] == 0
+        idx = (IN_IDX if inbound else OUT_IDX).get(stop)
+        if idx is None:
+            continue
+        stopped = a["current_status"] == "STOPPED_AT"
+        # Inbound runs down the list, outbound runs up it.
+        pos = idx if stopped else (idx - 0.5 if inbound else idx + 0.5)
+        out.append({
+            "id": v["id"], "dir": 0 if inbound else 1, "pos": round(pos, 2),
+            "stopped": stopped, "stale": not _live(a, snap["t"]),
+            "route": (rel["route"]["data"] or {}).get("id"),
+        })
+    return out
 
 
 def upstream_state(snap: dict) -> dict:

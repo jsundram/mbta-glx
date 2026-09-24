@@ -86,6 +86,8 @@ class Handler(BaseHTTPRequestHandler):
                     "following": [{"eta": r["eta"], "source": r["source"]}
                                   for r in rows[1:4]],
                     "upstream": service.upstream_state(snap),
+                    "line": service.line_map(snap),
+                    "stops": [n for n, _, _ in service.GLX_STOPS],
                     "recent": _arrivals.recent[-5:],
                     "headway_median_s": _model.headway,
                 }).encode()

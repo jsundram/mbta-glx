@@ -34,6 +34,38 @@
   .list{background:var(--card);border:1px solid var(--line);border-radius:10px;
         padding:4px 16px;margin-bottom:12px}
   .k{color:var(--dim)} .v{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  /* line map: one rail per direction, stop names between them */
+  .map{background:var(--card);border:1px solid var(--line);border-radius:10px;
+       padding:16px 14px 12px;margin-bottom:12px}
+  .term{display:flex;align-items:center;justify-content:center;gap:10px;
+        border:1px solid var(--line);border-radius:8px;padding:8px 12px;
+        margin-bottom:2px;background:color-mix(in srgb,var(--go) 7%,transparent)}
+  .term b{font-size:13px;font-weight:600}
+  .term .cars{display:flex;gap:4px;min-height:11px;align-items:center}
+  .grid{position:relative;display:grid;
+        grid-template-columns:34px 1fr 34px;align-items:center}
+  .rail{position:absolute;top:0;bottom:0;width:3px;border-radius:2px;
+        background:var(--line)}
+  .rail.l{left:16px} .rail.r{right:16px}
+  .stopname{text-align:center;font-size:13px;color:var(--dim);
+            padding:9px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .stopname.me{color:var(--ink);font-weight:600}
+  .node{position:absolute;width:9px;height:9px;border-radius:50%;
+        background:var(--bg);border:2.5px solid var(--line);
+        transform:translate(-50%,-50%)}
+  .node.l{left:17.5px} .node.r{right:17.5px;transform:translate(50%,-50%)}
+  .node.me{border-color:var(--go);width:11px;height:11px}
+  .train{position:absolute;width:15px;height:15px;border-radius:4px;
+         background:var(--go);transform:translate(-50%,-50%);
+         display:flex;align-items:center;justify-content:center;
+         transition:top .6s linear;box-shadow:0 0 0 3px var(--card)}
+  .train.l{left:17.5px} .train.r{right:17.5px;transform:translate(50%,-50%)}
+  .train.moving{opacity:.65;border-radius:50%}
+  .train.stale{background:var(--dim);opacity:.4}
+  .train::after{content:"";width:5px;height:5px;border-radius:1px;background:var(--card)}
+  .maphead{display:flex;justify-content:space-between;font-size:11px;
+           letter-spacing:.08em;text-transform:uppercase;color:var(--dim);
+           margin-bottom:6px}
   .foot{color:var(--dim);font-size:12px;margin-top:14px;line-height:1.6}
   .stale{opacity:.45}
   .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
@@ -50,6 +82,13 @@
     <div class="big" id="heroBig">--:--</div>
     <div class="sub" id="heroSub">connecting&hellip;</div>
   </div>
+  <div class="map">
+    <div class="term"><b>Medford/Tufts</b><span class="cars" id="termCars"></span></div>
+    <div class="maphead"><span>&darr; inbound</span><span>outbound &uarr;</span></div>
+    <div class="grid" id="grid">
+      <div class="rail l"></div><div class="rail r"></div>
+    </div>
+  </div>
   <div class="list" id="following"></div>
   <div class="foot" id="foot"></div>
 </div>
@@ -62,18 +101,18 @@ const mmss = s => (s < 0 ? "-" : "") + pad(Math.abs(s) / 60) + ":" + pad(Math.ab
 const hhmm = t => new Date(t * 1000).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
 
 function paint() {
-  const now = Date.now() / 1000;
   $("#clock").textContent = new Date().toLocaleTimeString([], {hour12: false});
   if (!data) return;
-  // The server timestamp drifts up to one poll behind; tick from the client so the
-  // countdown is smooth, anchored to the last good reading.
-  const skew = now - data.fetchedAt;
+  // One clock offset, measured at fetch, converts client time to server time.
+  // Everything below is then a plain difference of absolute timestamps, which is
+  // what makes the counters tick in real seconds instead of jumping per poll.
+  const now = Date.now() / 1000 + data.offset;
   const hero = $("#hero");
   const at = (data.at_station || [])[0];
   if (at) {
     hero.classList.add("here");
     $("#heroLabel").textContent = "Train at the station";
-    $("#heroBig").textContent = mmss(at.dwell_s + skew);
+    $("#heroBig").textContent = mmss(now - at.since);
     const late = at.late_s;
     const tag = late == null ? "" :
       late > 120 ? `<span class="vlate">${mmss(late)} late</span>` :
@@ -96,6 +135,7 @@ function paint() {
     $("#heroBig").textContent = "—";
     $("#heroSub").textContent = "nothing predicted";
   }
+  drawMap();
   $("#following").innerHTML = (data.following || []).map(r =>
     `<div class="row"><span class="k">${r.source}</span>`
     + `<span class="v">${hhmm(r.eta)} &middot; ${mmss(Math.max(0, r.eta - now))}</span></div>`
@@ -113,6 +153,73 @@ function paint() {
     + ` &middot; median headway ${(data.headway_median_s / 60).toFixed(1)} min`;
 }
 
+let rowTops = [];
+
+function drawMap() {
+  const g = $("#grid");
+  const stops = data.stops || [];
+  if (!g.dataset.built && stops.length) {
+    g.querySelectorAll(".stopname,.node,.train").forEach(e => e.remove());
+    stops.forEach(name => {
+      const d = document.createElement("div");
+      d.className = "stopname" + (name.startsWith("Magoun") ? " me" : "");
+      d.textContent = name;
+      d.style.gridColumn = "2";
+      g.appendChild(d);
+    });
+    g.dataset.built = "1";
+  }
+  // Measure once per paint: row centres drive both the nodes and the trains.
+  const names = [...g.querySelectorAll(".stopname")];
+  if (!names.length) return;
+  const base = g.getBoundingClientRect().top;
+  rowTops = names.map(n => n.getBoundingClientRect().top - base
+                            + n.getBoundingClientRect().height / 2);
+
+  g.querySelectorAll(".node").forEach(e => e.remove());
+  rowTops.forEach((y, i) => {
+    for (const side of ["l", "r"]) {
+      const n = document.createElement("div");
+      n.className = "node " + side + (stops[i].startsWith("Magoun") ? " me" : "");
+      n.style.top = y + "px";
+      g.appendChild(n);
+    }
+  });
+
+  const posY = p => {
+    const i = Math.max(0, Math.min(rowTops.length - 1, Math.floor(p)));
+    const j = Math.max(0, Math.min(rowTops.length - 1, Math.ceil(p)));
+    return rowTops[i] + (rowTops[j] - rowTops[i]) * (p - Math.floor(p));
+  };
+
+  const want = new Map();
+  for (const t of (data.line || [])) {
+    if (t.dir === 0 && t.pos <= 0.01 && t.stopped) continue;  // shown in terminus box
+    want.set(t.id, t);
+  }
+  for (const el of [...g.querySelectorAll(".train")])
+    if (!want.has(el.dataset.id)) el.remove();
+  for (const [id, t] of want) {
+    let el = g.querySelector(`.train[data-id="${CSS.escape(id)}"]`);
+    if (!el) {
+      el = document.createElement("div");
+      el.dataset.id = id;
+      g.appendChild(el);
+    }
+    el.className = "train " + (t.dir === 0 ? "l" : "r")
+      + (t.stopped ? "" : " moving") + (t.stale ? " stale" : "");
+    el.style.top = posY(t.pos) + "px";
+    el.title = id + (t.stopped ? " stopped" : " moving");
+  }
+
+  // Terminus box: inbound trains berthed at Medford/Tufts, ready to come back.
+  const atTerm = (data.line || []).filter(t => t.dir === 0 && t.pos <= 0.01 && t.stopped);
+  $("#termCars").innerHTML = atTerm.length
+    ? atTerm.map(t => `<span class="train" style="position:static;transform:none"
+        title="${t.id}"></span>`).join("")
+    : `<span style="font-size:12px;color:var(--dim)">no trains waiting</span>`;
+}
+
 async function poll() {
   try {
     const r = await fetch("/status", {cache: "no-store"});
@@ -121,7 +228,7 @@ async function poll() {
     // A server restart means new code; reload so this page is never stale.
     if (version && d.version !== version) return location.reload();
     version = d.version;
-    d.fetchedAt = Date.now() / 1000;
+    d.offset = d.now - Date.now() / 1000;   // server clock minus client clock
     data = d; lastOk = Date.now() / 1000;
   } catch (e) { /* keep painting from the last good reading */ }
   paint();

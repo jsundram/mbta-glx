@@ -154,3 +154,71 @@ def test_vehicle_identity_survives_a_headway_sized_jump():
     rows = [row(1000 + 480, vehicle="G-10065")]     # +8 min, as observed live
     got = watch.match_target(rows, committed, HEADWAY)
     assert got is not None and got["vehicle"] == "G-10065"
+
+
+# --- bug: dwell counter reset to 0 and jumped, because one missed poll
+#     was treated as the train departing ---
+
+def _veh(vid, stop, status, updated_iso, direction=0):
+    return {"id": vid,
+            "attributes": {"direction_id": direction, "current_status": status,
+                           "updated_at": updated_iso},
+            "relationships": {"stop": {"data": {"id": stop}},
+                              "route": {"data": {"id": "Green-E"}}}}
+
+
+def _isnap(t, vehicles):
+    return {"t": t, "vehicles": vehicles}
+
+
+def test_dwell_survives_a_missed_poll():
+    """A vehicle absent from one snapshot must not restart the dwell counter."""
+    import datetime as dt
+    import service
+    tr = service.ArrivalTracker()
+    t0 = dt.datetime.now(dt.timezone.utc).timestamp()
+    iso = lambda t: dt.datetime.fromtimestamp(t, dt.timezone.utc).isoformat()
+
+    here = tr.update(_isnap(t0, [_veh("G-1", "70508", "STOPPED_AT", iso(t0))]))
+    assert here["G-1"] == t0
+    tr.update(_isnap(t0 + 15, []))                       # dropped out of one poll
+    here = tr.update(_isnap(t0 + 30,
+                            [_veh("G-1", "70508", "STOPPED_AT", iso(t0 + 30))]))
+    assert here["G-1"] == t0, "dwell restarted after a single missed poll"
+
+
+def test_dwell_clears_once_the_train_actually_moves():
+    import datetime as dt
+    import service
+    tr = service.ArrivalTracker()
+    t0 = dt.datetime.now(dt.timezone.utc).timestamp()
+    iso = lambda t: dt.datetime.fromtimestamp(t, dt.timezone.utc).isoformat()
+    tr.update(_isnap(t0, [_veh("G-1", "70508", "STOPPED_AT", iso(t0))]))
+    here = tr.update(_isnap(t0 + 15,
+                            [_veh("G-1", "70506", "IN_TRANSIT_TO", iso(t0 + 15))]))
+    assert here == {}
+
+
+def test_dwell_order_is_stable_so_the_display_never_swaps():
+    import datetime as dt
+    import service
+    tr = service.ArrivalTracker()
+    t0 = dt.datetime.now(dt.timezone.utc).timestamp()
+    iso = lambda t: dt.datetime.fromtimestamp(t, dt.timezone.utc).isoformat()
+    tr.update(_isnap(t0, [_veh("G-2", "70508", "STOPPED_AT", iso(t0))]))
+    here = tr.update(_isnap(t0 + 15, [
+        _veh("G-2", "70508", "STOPPED_AT", iso(t0 + 15)),
+        _veh("G-1", "70508", "STOPPED_AT", iso(t0 + 15))]))
+    assert list(here) == ["G-2", "G-1"], "oldest arrival must sort first"
+
+
+def test_line_map_places_moving_trains_between_stops():
+    import service
+    snap = _isnap(0.0, [
+        _veh("G-in", "70508", "IN_TRANSIT_TO", None, direction=0),
+        _veh("G-out", "70507", "IN_TRANSIT_TO", None, direction=1),
+        _veh("G-at", "70512", "STOPPED_AT", None, direction=0)])
+    pos = {t["id"]: t["pos"] for t in service.line_map(snap)}
+    assert pos["G-at"] == 0.0                 # berthed at the terminus
+    assert pos["G-in"] == 1.5                 # inbound runs DOWN toward Magoun (2)
+    assert pos["G-out"] == 2.5                # outbound runs UP toward Tufts

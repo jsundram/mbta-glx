@@ -294,6 +294,10 @@ locally at 250 ms between 5 s polls so the countdown is smooth, keeps painting f
 the last good reading when the server is unreachable (and marks itself stale), and
 self-reloads when the server restarts with new code.
 
+A live GLX line map sits under the countdown: terminus at top, inbound running down
+the left rail, outbound running up the right. The right rail is the long-horizon
+signal made visible — those trains become the inbound ones after the turnaround.
+
 Built as a debugging surface as much as a product: the failure modes in this
 project are all *temporal*, and watching predictions move in real time makes them
 obvious in a way that reading logs after the fact does not.
@@ -409,6 +413,10 @@ timed pushes ("train in 2 min" / "1 min" / "now") approximate a ticking countdow
   a whole day records only each vehicle's first visit; trains cycle through Magoun
   repeatedly, measured at a **30% undercount over three hours**. This corrupted the
   prediction-error calibration until fixed.
+- **A vehicle missing from one poll has not left the platform.** Treating absence as
+  departure reset the dwell counter to zero and then made it jump. Grace period of
+  75 s for vehicles missing from the feed; a vehicle *seen elsewhere* clears at once.
+  Display order is by arrival time so two trains at the platform never swap places.
 - **MBTA predictions flap by ~8 minutes for ~90 seconds.** Measured twice on
   2026-09-24: `16:23 → 16:31 → 16:23` and `17:19 → 17:11`, both about 90 s long,
   both the same vehicle throughout. Consequences, each learned the hard way:

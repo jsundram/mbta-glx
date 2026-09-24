@@ -16,7 +16,13 @@ uv run --with polars python src/server.py 8723   # then open:
 uv run python src/service.py 6                   # one-shot CLI, 6-minute walk
 ```
 
-**The board** answers one question at a glance: *next train expected in MM:SS*, or
+**The board** carries a live GLX line map — Medford/Tufts at the top with the trains
+waiting to turn around, inbound trains running *down* the left rail toward Magoun,
+outbound trains running *up* the right rail toward the terminus. Square markers are
+stopped, round ones are moving, grey ones are stale positions. Because today's
+inbound train is yesterday's outbound train, the right rail is a preview of the left.
+
+It also answers one question at a glance: *next train expected in MM:SS*, or
 *train at the station* with how long it has been there and how late it is against
 the timetable. It ticks locally every 250 ms and re-polls every 5 s, so the
 countdown stays smooth even between polls, and it reloads itself when the server
