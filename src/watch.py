@@ -57,6 +57,7 @@ class Watcher:
 
     # ---- plan lifecycle ----
     def new_plan(self, dest: str, hhmm: str, conf: float = 0.90) -> dict:
+        dest = brief.resolve(dest, self.model)
         now = dt.datetime.now(service.TZ)
         h, m = (int(x) for x in hhmm.split(":"))
         dl = now.replace(hour=h, minute=m, second=0, microsecond=0)

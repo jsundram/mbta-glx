@@ -33,12 +33,21 @@ Set `MBTA_API_KEY` (free, from api-v3.mbta.com) to lift the keyless rate limit.
 **Daily use** — tell it where you need to be, then answer the notifications:
 
 ```bash
-./src/watch.sh plan 70199 09:00        # Park Street by 9:00
-./src/watch.sh plan 70206 08:45 0.95   # North Station by 8:45, 95% confidence
+./src/watch.sh plan park 09:00              # Park Street by 9:00
+./src/watch.sh plan "north station" 08:45 0.95   # ...at 95% confidence
 ```
 
-Destinations: `70502` Lechmere · `70206` North Station · `70202` Government Center ·
-`70199` Park Street · `70159` Boylston · `70155` Copley.
+Destinations take a name or a GTFS stop id — any unambiguous substring works
+(`park`, `copley`, `lechmere`, `boylston`, `government`, `north`):
+
+| name | stop id | typical ride from Magoun |
+|---|---|---|
+| Lechmere | 70502 | 7.7 min |
+| North Station | 70206 | 13.6 min |
+| Government Center | 70202 | 18.4 min |
+| Park Street | 70199 | 21.2 min |
+| Boylston | 70159 | 23.7 min |
+| Copley | 70155 | 28.2 min |
 
 You get a brief with up to three trains, each a button showing its on-time chance.
 Tap one to commit. Then **Leave now** fires at the right moment (priority 5), with

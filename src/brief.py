@@ -17,6 +17,22 @@ NO_SHOW = 0.096
 N = 20_000
 
 
+def resolve(dest: str, model) -> str:
+    """Accept a stop id or a human name: 'park', 'north station', 'govt'."""
+    rides = model.m.get("rides", {})
+    if dest in rides:
+        return dest
+    q = dest.strip().lower()
+    hits = [sid for sid, r in rides.items() if q in r["name"].lower()]
+    if len(hits) == 1:
+        return hits[0]
+    known = ", ".join(f"{r['name']} ({sid})" for sid, r in rides.items())
+    if not hits:
+        raise SystemExit(f"unknown destination {dest!r}. Known: {known}")
+    raise SystemExit(f"{dest!r} is ambiguous: "
+                     + ", ".join(rides[h]["name"] for h in hits))
+
+
 def _qsample(lo: float, mid: float, hi: float, n: int, rng) -> np.ndarray:
     """Sample an arrival time from its q10/q50/q90, piecewise-linear in between."""
     xs = [0.0, 0.10, 0.50, 0.90, 1.0]
@@ -147,6 +163,7 @@ if __name__ == "__main__":
     hhmm = sys.argv[2] if len(sys.argv) > 2 else "17:30"
     walk = int(os.environ.get("MAGOUN_WALK_S", "390"))
     m = service.Model()
+    dest = resolve(dest, m)
     now = dt.datetime.now(service.TZ)
     h, mi = (int(x) for x in hhmm.split(":"))
     dl = now.replace(hour=h, minute=mi, second=0, microsecond=0)

@@ -143,6 +143,17 @@ Nothing to build; the constraint is calendar time.
 
 - [ ] ≥ 300 Magoun inbound arrivals in `data/pairs/` with predictions at 5–10 min lead.
 - [ ] ≥ 21 consecutive days of `sched_full` snapshots.
+- [ ] **Measure prediction volatility, not just error.** A live run on 2026-09-24
+      showed a Magoun inbound prediction move 16:23 → 16:31 → 16:23 within 90
+      seconds. So some of the measured "error at 5–10 min lead" is *flap* rather
+      than genuine uncertainty, and a prediction sampled once does not represent
+      what the rider would have seen a minute earlier. Per (train, stop), compute
+      the per-minute drift of its ETA and the size of the largest jump; report
+      alongside the error quantiles. A stable ±90 s and a flapping ±90 s call for
+      very different leave-now logic — the first can be trusted as quoted, the
+      second needs smoothing or a wider quoted band.
+      `data/pairs/*.parquet` already stores every (made_at, pred_arr) pair, so this
+      is computable from the archive with no new capture.
 
 **Acceptance:** the MBTA prediction-error table in `validate_live.py` is stable
 across two consecutive weeks (quantiles move < 20 s week over week).
