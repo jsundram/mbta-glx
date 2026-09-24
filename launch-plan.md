@@ -139,7 +139,11 @@ the raw archive churns **13.8 MB/day** through sync. The 14-day prune holds it a
 
 ## Phase 1 — Accumulate  (passive, 2–4 weeks)
 
-Nothing to build; the constraint is calendar time.
+Calendar time is the constraint for *volume*, but accumulating and testing are
+independent — the archiver runs regardless, and live testing does not consume it.
+**Keep exercising the notifier daily while data accumulates.** Waiting is not
+neutral: a silent capture bug (see the 30% arrival undercount) banks corrupt data,
+and once `--prune 14` removes the raw archive the corruption is permanent.
 
 - [ ] ≥ 300 Magoun inbound arrivals in `data/pairs/` with predictions at 5–10 min lead.
 - [ ] ≥ 21 consecutive days of `sched_full` snapshots.
@@ -356,9 +360,12 @@ timed pushes ("train in 2 min" / "1 min" / "now") approximate a ticking countdow
 ## Engineering debt (Phase 3 of your plan, made concrete)
 
 - [x] `git init` — done; data excluded via `.gitignore`, Dropbox covers durability.
-- [ ] Tests for the logic that has already produced silent bugs: epoch µs-vs-s,
-      stale vehicle→leg links, quantile-vs-median mixing, parked-train ghosts.
-      Every one of these was caught by chance, not by a check.
+- [x] `tests/test_regressions.py` — one test per bug that actually shipped. Runs in
+      0.12 s and now runs as part of `src/daily.sh`. Covers: the re-match jumping to
+      the next train, arrivals counted per-visit not per-vehicle, `?since=now`
+      returning HTTP 400, command posts at min priority, destination name resolution.
+- [ ] Still untested by anything automated: epoch µs-vs-s, stale vehicle→leg links,
+      quantile-vs-median mixing, parked-train ghosts.
 - [ ] `model.json` schema version + a refit script that fails loudly on drift.
 - [ ] Monitoring: alert if `data/pairs/` or `data/sched_full/` misses a day.
 

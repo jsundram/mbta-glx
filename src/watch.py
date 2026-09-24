@@ -41,6 +41,45 @@ def save(p: dict) -> None:
     STATE.write_text(json.dumps(p, indent=1))
 
 
+def match_target(rows: list[dict], committed: dict, headway: float) -> dict | None:
+    """Find the committed train among current predictions, or None.
+
+    Pure so it can be tested without the network. Two rules earn their place:
+    a vehicle id is proof of identity, and positional drift is capped below half a
+    headway so a flapping prediction can never re-point the commitment at the
+    NEXT train (which silently slides the plan and suppresses leave-now).
+    """
+    tgt = committed["target_eta"]
+    vid = committed.get("vehicle")
+    if vid:
+        same = [r for r in rows if r.get("vehicle") == vid]
+        if same:
+            return min(same, key=lambda r: abs(r["eta"] - tgt))
+    near = [r for r in rows if abs(r["eta"] - tgt) <= MATCH]
+    if not near:
+        limit = min(WIDE, headway * 0.45)
+        near = [r for r in rows if abs(r["eta"] - tgt) <= limit]
+    return min(near, key=lambda r: abs(r["eta"] - tgt)) if near else None
+
+
+def count_arrivals(snapshots, stop: str, direction: int = 0) -> list[float]:
+    """Arrival times at `stop`, counted as transitions into STOPPED_AT.
+
+    Keying on (vehicle, stop) instead undercounts badly -- trains cycle through
+    Magoun many times a day and only the first visit would register.
+    """
+    prev: dict[str, tuple] = {}
+    out: list[float] = []
+    for snap in snapshots:
+        for v in snap["vehicles"]:
+            cur = (v.get("stop"), v.get("status"))
+            if (v.get("dir") == direction and v.get("stop") == stop
+                    and v.get("status") == "STOPPED_AT" and prev.get(v["id"]) != cur):
+                out.append(snap["t"])
+            prev[v["id"]] = cur
+    return out
+
+
 def log(msg: str) -> None:
     """Timestamped line to watch.log -- the only window into what the phone sent."""
     print(f"{dt.datetime.now(service.TZ):%H:%M:%S} {msg}", flush=True)
@@ -127,22 +166,11 @@ class Watcher:
             rows = service.etas(snap, self.model, p["walk"], berths=b)
             com = p["committed"]
             tgt = com["target_eta"]
-            vid = com.get("vehicle")
-            # Identity first: a vehicle id is proof this is the same train.
-            same = [r for r in rows if vid and r.get("vehicle") == vid]
-            near = same or [r for r in rows if abs(r["eta"] - tgt) <= MATCH]
-            if not near:
-                # MBTA predictions flap: one observed jump went 16:23 -> 16:31 ->
-                # 16:23 within 90 s, so widen before giving up. But never widen far
-                # enough to swallow the NEXT train -- a headway away is a different
-                # train, and silently re-pointing at it means leave-now never fires.
-                limit = min(WIDE, self.model.headway * 0.45)
-                near = [r for r in rows if abs(r["eta"] - tgt) <= limit]
-                if near:
-                    j = min(near, key=lambda r: abs(r["eta"] - tgt))
-                    log(f"target drifted {(j['eta']-tgt)/60:+.1f} min "
-                        f"to {fmt(j['eta'])} (still tracking)")
-            if not near:
+            row = match_target(rows, com, self.model.headway)
+            if row is not None and abs(row["eta"] - tgt) > MATCH:
+                log(f"target drifted {(row['eta']-tgt)/60:+.1f} min "
+                    f"to {fmt(row['eta'])} (still tracking)")
+            if row is None:
                 miss = p["committed"].get("misses", 0) + 1
                 p["committed"]["misses"] = miss
                 log(f"no match for {fmt(tgt)} ({miss}/{MISS_TICKS})")
@@ -150,7 +178,6 @@ class Watcher:
                 if miss >= MISS_TICKS:
                     self._recover(p, rows, snap)
                 return
-            row = min(near, key=lambda r: abs(r["eta"] - tgt))
             com["misses"] = 0
             com["target_eta"] = row["eta"]
             if row.get("vehicle"):
