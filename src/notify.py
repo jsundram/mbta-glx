@@ -12,11 +12,15 @@ lost. Subscriptions therefore use `since=now` and the rider just taps again.
 
 Topics are unguessable secrets -- there is no account -- so keep them out of git.
 
-    export MAGOUN_NTFY_TOPIC=magoun-<random>       # service -> phone
-    export MAGOUN_NTFY_CMD=magoun-cmd-<random>     # phone -> service
+    export MAGOUN_NTFY_TOPIC=magoun-<random>       # service -> phone: SUBSCRIBE here
+    export MAGOUN_NTFY_CMD=magoun-cmd-<random>     # phone -> service: do NOT subscribe
+
+Subscribing to the command topic on the phone echoes your own button taps back as
+notifications, which looks like the notifier spamming you.
 """
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -56,17 +60,23 @@ def send(title: str, message: str, *, priority: int = 3, tags: list[str] | None 
     return False
 
 
-def listen(topic: str = "", since: str = "now") -> Iterator[dict]:
+def listen(topic: str = "", since: str = "") -> Iterator[dict]:
     """Yield messages posted to a topic. Reconnects for as long as it is iterated.
 
-    `since` stays at "now": ntfy.sh does not replay cached messages for anonymous
-    topics, so there is no catch-up to be had after a disconnect.
+    Pass no `since`: the bare stream delivers new messages, which is what we want.
+    ntfy rejects `since=now` with HTTP 400 (only durations, timestamps, message ids
+    and "all" are valid), and there is no catch-up to be had anyway because
+    ntfy.sh does not replay cached messages for anonymous topics.
     """
     topic = topic or CMD
+    fails = 0
     while True:
         try:
-            url = f"{SERVER}/{topic}/json?since={since}"
+            url = f"{SERVER}/{topic}/json"
+            if since:
+                url += f"?since={since}"
             with urllib.request.urlopen(url, timeout=None) as r:
+                fails = 0
                 for line in r:
                     line = line.strip()
                     if not line:
@@ -77,13 +87,19 @@ def listen(topic: str = "", since: str = "now") -> Iterator[dict]:
                         continue
                     if m.get("event") == "message":
                         yield m
-        except Exception:
-            time.sleep(5)
+        except Exception as e:  # noqa: BLE001
+            # Never fail silently here: a bad URL retried forever looks identical
+            # to "nobody tapped anything", which cost real debugging time once.
+            fails += 1
+            if fails <= 3 or fails % 20 == 0:
+                print(f"ntfy listen({topic}) failed x{fails}: {type(e).__name__}: {e}",
+                      file=sys.stderr, flush=True)
+            time.sleep(min(5 * fails, 60))
 
 
 def watch_commands(handler: Callable[[str, dict], None], topic: str = "") -> None:
     """Blocking loop: call `handler(command_text, raw)` for each tap from the phone."""
-    for m in listen(topic, since="now"):
+    for m in listen(topic):
         text = (m.get("message") or "").strip()
         if text:
             handler(text, m)

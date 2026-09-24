@@ -20,9 +20,12 @@ Set `MBTA_API_KEY` (free, from api-v3.mbta.com) to lift the keyless rate limit.
 
 **One-time setup:**
 
-1. Install the **ntfy** app (iOS/Android, free) and subscribe to both topics in
-   `ops/ntfy.env` — the first is service→phone, the second carries button taps back.
-   They are unguessable strings and act as passwords, so the file is gitignored.
+1. Install the **ntfy** app (iOS/Android, free) and subscribe to
+   **`MAGOUN_NTFY_TOPIC` only** (from `ops/ntfy.env`). Do *not* subscribe to
+   `MAGOUN_NTFY_CMD` — that topic carries button taps in the other direction, and
+   subscribing to it just echoes your own commands back at you. Both strings are
+   unguessable and act as passwords, so the file is gitignored.
+   Allow ntfy through your Focus settings, or the leave-now alert stays silent.
 2. Test the channel: `./src/watch.sh` is the runtime; for a one-off check run
    `set -a && . ops/ntfy.env && set +a && uv run python src/notify.py`.
 3. Install the agent: `./ops/install.sh` (adds `com.magoun.watch`).

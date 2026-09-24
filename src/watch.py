@@ -38,6 +38,11 @@ def save(p: dict) -> None:
     STATE.write_text(json.dumps(p, indent=1))
 
 
+def log(msg: str) -> None:
+    """Timestamped line to watch.log -- the only window into what the phone sent."""
+    print(f"{dt.datetime.now(service.TZ):%H:%M:%S} {msg}", flush=True)
+
+
 def fmt(t: float) -> str:
     return dt.datetime.fromtimestamp(t, service.TZ).strftime("%-I:%M")
 
@@ -87,6 +92,7 @@ class Watcher:
         p["fired"] = {}
         p["left_at"] = None
         save(p)
+        log(f"committed to {fmt(opts[idx]['eta'])} (p={opts[idx]['p']:.0%})")
         notify.send("Locked in", f"Watching the {fmt(opts[idx]['eta'])}. "
                     f"I'll tell you when to leave.", priority=2, tags=["white_check_mark"])
 
@@ -120,6 +126,7 @@ class Watcher:
                              notify.reply_action("Next one", "bump"),
                              notify.reply_action("Cancel", "cancel")])
                 p["fired"]["leave"] = True
+                log(f"fired LEAVE NOW for {fmt(row['eta'])} via {row['source']}")
             # Adjust: fires once the train is moving and the ETA is sharp.
             if (p.get("left_at") and not p["fired"].get("adjust")
                     and row["source"] in ADJUST_SOURCES):
@@ -133,6 +140,7 @@ class Watcher:
                     f"{(row['hi']-row['lo'])/2:.0f}s",
                     priority=4, tags=["steam_locomotive"])
                 p["fired"]["adjust"] = True
+                log(f"fired ADJUST slack={slack:+.0f}s via {row['source']}")
             save(p)
 
     def _recover(self, p: dict, rows: list, snap: dict) -> None:
@@ -152,12 +160,14 @@ class Watcher:
         else:
             notify.send("That train vanished", "No good option left for your deadline.",
                         priority=5, tags=["warning"])
+        log("fired RECOVERY: committed train no longer predicted")
         p["fired"]["recover"] = True
         p["committed"] = None
         save(p)
 
     # ---- commands from the phone ----
     def on_command(self, text: str, _raw: dict) -> None:
+        log(f"command: {text!r}")
         cmd, *rest = text.split()
         with self.lock:
             p = load()
@@ -179,6 +189,9 @@ class Watcher:
         elif cmd == "status":
             notify.send("Status", json.dumps(p, indent=1)[:900] if p else "no plan",
                         priority=2)
+        else:
+            log(f"  (no handler for {cmd!r}"
+                f"{'; no plan active' if not p else ''})")
 
 
 def main() -> None:

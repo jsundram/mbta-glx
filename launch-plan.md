@@ -230,8 +230,17 @@ on the leave-now push tells the service directly. No inbound port, no tunnel, no
 static IP, and the notifier stays host-portable. If it is never tapped, the adjust
 push simply does not fire — a missed nudge rather than a wrong one.
 
-**Known limitation:** ntfy.sh does not replay cached messages for anonymous topics,
-so a tap made while the watcher is down is lost. Acceptable — tap again.
+**Known limitations, all found by testing:**
+
+- ntfy.sh does not replay cached messages for anonymous topics, so a tap made while
+  the watcher is down is lost. Acceptable — tap again.
+- `since=now` is **not** valid on the subscribe stream (HTTP 400); only durations,
+  timestamps, message ids and `all` are. Subscribe with no `since` at all.
+- Priority 5 does **not** pierce an iOS Focus mode. ntfy must be allowed through
+  Focus manually, or the leave-now alert is silent — which is the whole product
+  failing. This is the strongest argument for Pushover (5c) on another device.
+- Subscribe on the phone to the outbound topic **only**. Subscribing to the command
+  topic echoes your own taps back and looks like the notifier spamming you.
 
 ### Superseded — how does it know you left?
 
