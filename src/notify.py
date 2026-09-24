@@ -32,9 +32,14 @@ CMD = os.environ.get("MAGOUN_NTFY_CMD", "")
 
 
 def reply_action(label: str, cmd: str, clear: bool = True) -> dict:
-    """An action button that posts `cmd` back to the command topic when tapped."""
+    """An action button that posts `cmd` back to the command topic when tapped.
+
+    The POST carries min priority so that a phone which is (wrongly) subscribed to
+    the command topic does not buzz with an echo of its own button tap.
+    """
     return {"action": "http", "label": label, "url": f"{SERVER}/{CMD}",
-            "method": "POST", "body": cmd, "clear": clear}
+            "method": "POST", "body": cmd, "clear": clear,
+            "headers": {"Priority": "min", "Title": "cmd"}}
 
 
 def send(title: str, message: str, *, priority: int = 3, tags: list[str] | None = None,

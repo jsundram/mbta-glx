@@ -96,6 +96,16 @@ class Watcher:
         notify.send("Locked in", f"Watching the {fmt(opts[idx]['eta'])}. "
                     f"I'll tell you when to leave.", priority=2, tags=["white_check_mark"])
 
+    def _detail(self, p: dict, snap: dict, berths: dict, row: dict) -> dict | None:
+        """Live catch / on-time / 95%-there numbers for the committed train."""
+        try:
+            opts = brief.options(p["dest"], p["deadline"], p["walk"],
+                                 self.model, snap, berths)
+        except Exception:  # noqa: BLE001 - never let the leave-now push fail on this
+            return None
+        near = [o for o in opts if abs(o["eta"] - row["eta"]) <= MATCH]
+        return min(near, key=lambda o: abs(o["eta"] - row["eta"])) if near else None
+
     # ---- the tick ----
     def tick(self) -> None:
         with self.lock:
@@ -118,9 +128,13 @@ class Watcher:
             leave_by = row["lo"] - p["walk"]
             now = snap["t"]
             if not p["fired"].get("leave") and now >= leave_by - TICK / 2:
+                o = self._detail(p, snap, b, row)
+                extra = (f"\ncatch {o['p_catch']:.0%} · on time {o['p_ontime']:.0%}"
+                         f" · 95% there by {fmt(o['dest_p95'])}") if o else ""
                 notify.send(
                     "Leave now", f"{fmt(row['eta'])} train · "
-                    f"{(row['eta']-now)/60:.0f} min out · via {row['source']}",
+                    f"{(row['eta']-now)/60:.0f} min out · via {row['source']}"
+                    f" (+/-{(row['hi']-row['lo'])/2:.0f}s){extra}",
                     priority=5, tags=["runner"],
                     actions=[notify.reply_action("On my way", "left"),
                              notify.reply_action("Next one", "bump"),

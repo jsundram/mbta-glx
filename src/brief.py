@@ -59,6 +59,7 @@ def options(dest: str, deadline: float, walk: int, model: service.Model,
             "p_ontime": float(np.mean(at_dest <= deadline)),
             "dest_p50": float(np.median(at_dest)),
             "dest_p90": float(np.quantile(at_dest, 0.9)),
+            "dest_p95": float(np.quantile(at_dest, 0.95)),
             "catchable": p_catch >= 0.90,
         })
     return out[:limit]
@@ -107,6 +108,8 @@ def health(model: service.Model, window_h: float = 3.0) -> dict:
 
 def render(opts: list[dict], hl: dict, dest_name: str, deadline: float,
            target: float) -> tuple[str, str]:
+    """Three views of the same distribution: how likely you are to board, how
+    likely you are to arrive by the deadline, and when you are near-certainly there."""
     tz = service.TZ
     f = lambda t: dt.datetime.fromtimestamp(t, tz).strftime("%-I:%M")
     title = f"{dest_name} by {f(deadline)}"
@@ -116,18 +119,18 @@ def render(opts: list[dict], hl: dict, dest_name: str, deadline: float,
     lines = []
     for o in opts:
         mark = "*" if pick and o is pick else " "
-        spare = (deadline - o["dest_p50"]) / 60
         if o["p_catch"] < 0.5:
             when = "too late"
         elif not o["catchable"]:
-            when = "tight — go now"
+            when = "tight, go now"
         elif o["leave_by"] <= now + 60:
             when = "leave now"
         else:
             when = f"leave {f(o['leave_by'])}"
         lines.append(
-            f"{mark} {f(o['eta'])} -> {f(o['dest_p50'])}  "
-            f"{o['p_ontime']:.0%} on time  {spare:+.0f}m spare  ({when})")
+            f"{mark} {f(o['eta'])} train -> {dest_name} ~{f(o['dest_p50'])}  ({when})\n"
+            f"   catch {o['p_catch']:.0%} if you go now · "
+            f"on time {o['p_ontime']:.0%} · 95% there by {f(o['dest_p95'])}")
     if hl["state"] == "unknown":
         lines.append(f"\nService today: unknown ({hl.get('note','')})")
     else:
