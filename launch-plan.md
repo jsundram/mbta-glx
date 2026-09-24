@@ -117,6 +117,13 @@ launchctl list | grep magoun
 tail -f data/live/archiver.err
 ```
 
+**`launchctl bootout` is asynchronous.** Bootstrapping before the unload finishes
+fails with `Bootstrap failed: 5: Input/output error` *and leaves the agent stopped* —
+a reinstall that silently takes the archiver down. `ops/install.sh` now polls
+`launchctl print` until the agent is really gone before bootstrapping. Never run it
+with `sudo`: LaunchAgents load into your GUI domain (`gui/501`), root has none, and
+launchctl reports only `125: Domain does not support specified action`.
+
 **Schema changes must be additive.** `rollup.py` reads every archived day, including
 ones written by older code, so never rename or repurpose a field — add a new one and
 leave old records missing it. `data/pairs/*.parquet` is the long-term store; if its
