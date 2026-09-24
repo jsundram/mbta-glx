@@ -232,46 +232,77 @@ Start with (2), since committing to a train is already the interaction.
 
 ## Phase 5 — Delivery
 
-### The real question is *where it runs*, not which channel
+### Start on this Mac, move to cloud later — yes, if we hold one line
 
-The notifier must fire at ~08:04 with ~30 s precision. That is a scheduling problem
-before it is a notification problem.
+The notifier must fire at ~08:04 with ~30 s precision. macOS sleeps, and `launchd`
+runs a missed job *on wake*, far too late. So the Mac is fine to **start** on (develop
+against it, prove the loop) but is not the end state.
 
-| host | fires reliably at 08:04? | cost | notes |
+Migration stays cheap if we hold this architectural rule from the first line of code:
+
+> **The notifier depends only on (a) the MBTA API and (b) a small bundle —
+> `model.json`, today's schedule snapshot, and a few KB of state. Never on the raw
+> archive.**
+
+Everything needed to fire a notification is < 100 KB. The archiver and its 190 GB-class
+history can stay on the Mac (or stop entirely) without the notifier caring.
+
+- [x] Config via env (`MAGOUN_ROOT`, `MAGOUN_WALK_S`) — no absolute paths in code.
+- [x] Real timezone (`ZoneInfo("America/New_York")`). **Was hardcoded to EDT**, which
+      would have silently broken every schedule lookup on 2026-11-01.
+- [ ] `--once` tick mode so a cloud cron can drive it without a long-running process.
+- [ ] No `launchd` assumptions inside application code; scheduling stays in `ops/`.
+
+Migration then = copy the bundle, set env vars, deploy. Hosts, when that day comes:
+Raspberry Pi (~$50 once), VPS/fly.io ($0–5/mo), or Lambda + EventBridge (1-min
+granularity). GitHub Actions cron is out — 5-min granularity and routinely 5–15 min late.
+
+### Channel: three real options, in increasing cost
+
+**(a) Off-the-shelf app — nothing to build.**
+
+| app | cost | pierces Do Not Disturb | action buttons |
 |---|---|---|---|
-| **This Mac** (today) | **No** | £0 | macOS sleeps. `launchd` runs a missed job *on wake*, which is far too late. `caffeinate`/`pmset repeat wake` can force it but is fragile and keeps the machine up. |
-| Raspberry Pi on the LAN | Yes | ~$50 once | Always on, quiet, keeps data at home. Another box to maintain. |
-| Small VPS / fly.io | Yes | $0–5/mo | Most reliable. Needs the archiver + model deployed off-Mac. |
-| GitHub Actions cron | **No** | £0 | 5-min granularity and routinely 5–15 min late. Fine for the daily rollup, useless for a leave-now trigger. |
-| AWS Lambda + EventBridge | Yes | pennies | 1-min granularity, reliable. Most moving parts. |
+| **ntfy** | free | no | **yes — incl. `http`** |
+| **Pushover** | $5 once | yes (priority 2 = emergency, retries until acked) | limited |
 
-**This is the first thing to settle in Phase 5.** A perfect notification that fires
-after a sleeping Mac wakes up is worth nothing. Note the split: the *archiver* is
-already fine on the Mac (gaps during sleep cost a little data, not a missed train),
-but the *trigger* is not.
+**ntfy's `http` action button solves the open question above for free.** A notification
+can carry a "Leaving now" button that POSTs straight back to the service — that single
+tap both commits the train and arms the countdown, with zero app development. ntfy also
+supports up to 3 buttons, priority 1–5, and scheduled/updatable messages via
+`sequence_id`. Pushover's edge is emergency priority, which pierces quiet hours — likely
+worth $5 once a silenced 08:04 alert costs a real missed train.
 
-### Channel, once hosting is settled
+**(b) PWA — yes, and probably the end state.** iOS has supported Web Push for
+home-screen web apps since 16.4, so a PWA gets both the morning-brief UI (see options,
+tap to commit) *and* real push, with **no App Store and no $99/yr**. Constraints: must
+be added to the Home Screen (not just a Safari tab), HTTPS only, permission from a user
+gesture, subscription dies if it is removed from the Home Screen, no Live Activities,
+and no critical-alert/DND bypass. For a brief you read at 07:50 and a trigger at 08:04,
+none of those bite.
 
-| channel | effort | pierces Do Not Disturb | countdown on lock screen | cost |
-|---|---|---|---|---|
-| **ntfy.sh** | ~1 h | no | no | free |
-| **Pushover** | ~2 h | yes (priority 2) | no | $5 once |
-| Telegram bot | ~1 h | no | no | free |
-| **Native iOS app + APNs** | days–weeks | yes | **yes (Live Activity)** | $99/yr |
+**(c) Native — only for the ticking countdown.** A live-updating lock-screen countdown
+is an iOS Live Activity, which genuinely requires a native app. On distribution: the
+App Store concern is real (guideline 4.2, minimum functionality) but **irrelevant, because
+it never needs to ship publicly**:
 
-**The "start jogging" trigger has a quality ceiling on the cheap options.** A
-countdown that updates on the lock screen is an iOS Live Activity, which requires a
-real app. Everything else can only send discrete pushes — "train in 90 s" once,
-with no live tick.
+- Free Apple ID sideload — profile expires every **7 days**. Impractical.
+- **$99/yr developer account + TestFlight** — 90-day builds, internal testers, no public
+  review. This is the normal way to run a personal app.
+- React Native / Expo speeds up the ordinary app, but Live Activities still need a native
+  module, so RN does not avoid either the $99 or the native work.
 
-Recommended ladder, each step only if the previous proves useful:
+**Before paying for (c), test whether the countdown is needed at all.** Two or three
+timed pushes ("train in 2 min" / "1 min" / "now") approximate a ticking countdown over a
+3–4 minute walk segment, and they fit inside the 4–6 notification budget already agreed.
 
-- [ ] **5a — ntfy, on whatever host.** Proves the whole loop end to end for an hour
-      of work. Discrete pushes only. Do this first regardless of the endpoint.
-- [ ] **5b — Pushover** if leave-now needs to pierce Do Not Disturb (it probably
-      does — a silenced 08:04 alert is a missed train).
-- [ ] **5c — native app with a Live Activity** only if this earns a place in the
-      daily routine. That is the version that actually delivers the countdown.
+### Recommended ladder
+
+- [ ] **5a — ntfy, on this Mac.** ~1 hour. Proves the loop end to end and gets the
+      "Leaving now" button immediately. Do this first regardless of the end state.
+- [ ] **5b — PWA** for the morning brief and train picking. Free, no store, likely final.
+- [ ] **5c — Pushover** if leave-now must pierce Do Not Disturb.
+- [ ] **5d — native app** only if discrete pushes prove insufficient for the countdown.
 
 ### Also in Phase 5
 

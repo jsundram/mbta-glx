@@ -20,13 +20,19 @@ import pathlib
 import time
 import urllib.parse
 import urllib.request
+from zoneinfo import ZoneInfo
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-TZ = dt.timezone(dt.timedelta(hours=-4))          # America/New_York, EDT
+# Everything the notifier needs is configurable, so it can move off this Mac to a
+# cloud host without code changes: it depends only on the MBTA API plus a small
+# bundle (model.json + today's schedule), never on the raw archive.
+ROOT = pathlib.Path(os.environ.get("MAGOUN_ROOT",
+                                   pathlib.Path(__file__).resolve().parent.parent))
+TZ = ZoneInfo("America/New_York")   # must be a real zone: EDT->EST flips 2026-11-01
 MAGOUN_IN, BALL_IN, MED_IN, MED_OUT = "70508", "70510", "70512", "70511"
+DEFAULT_WALK_ENV = int(os.environ.get("MAGOUN_WALK_S", "390"))
 KEY = os.environ.get("MBTA_API_KEY")
 VETO_WINDOW = 480        # a scheduled train this close with nothing upstream is a no-show
-DEFAULT_WALK = 360
+DEFAULT_WALK = DEFAULT_WALK_ENV
 STALE_VEHICLE = 180      # a position older than this is a parked ghost, not live service
 BERTH_STATE = ROOT / "data" / "berth.json"
 
