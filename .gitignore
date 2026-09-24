@@ -1,0 +1,14 @@
+# Raw + derived data lives in Dropbox, not git. It is large and churns daily.
+data/raw/
+data/live/
+data/pairs/
+data/sched/
+data/sample.parquet
+data/index.csv
+data/magoun.parquet
+data/berth.json
+data/ref/*.parquet
+out/
+__pycache__/
+*.pyc
+.DS_Store

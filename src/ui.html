@@ -1,0 +1,99 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Magoun Inbound</title>
+<style>
+  :root{
+    --bg:#fbfaf8; --card:#fff; --ink:#1a1a1a; --dim:#6b6b6b; --line:#e4e1dc;
+    --go:#1a7f5a; --wait:#b0821a; --no:#a63d3d; --bar:#c9c4bc; --accent:#1a5f8f;
+  }
+  @media (prefers-color-scheme:dark){:root:not([data-theme=light]){
+    --bg:#131313; --card:#1c1c1c; --ink:#ececec; --dim:#9a9a9a; --line:#2e2e2e;
+    --go:#4cc38a; --wait:#e0b44c; --no:#e06c6c; --bar:#3a3a3a; --accent:#6ab3e8;}}
+  :root[data-theme=dark]{
+    --bg:#131313; --card:#1c1c1c; --ink:#ececec; --dim:#9a9a9a; --line:#2e2e2e;
+    --go:#4cc38a; --wait:#e0b44c; --no:#e06c6c; --bar:#3a3a3a; --accent:#6ab3e8;}
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--ink);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+       margin:0;padding-block:20px;padding-left:16px;padding-right:16px;}
+  .wrap{max-width:620px;margin:0 auto}
+  h1{font-size:19px;margin:0 0 2px;letter-spacing:-.01em}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:16px}
+  .row{background:var(--card);border:1px solid var(--line);border-radius:10px;
+       padding:12px 14px;margin-bottom:9px}
+  .top{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+  .mins{font-size:27px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+  .clock{color:var(--dim);font-size:13px;font-variant-numeric:tabular-nums}
+  .act{margin-left:auto;font-weight:600;font-size:14px;white-space:nowrap}
+  .go{color:var(--go)} .wt{color:var(--wait)} .no{color:var(--no)}
+  .meta{color:var(--dim);font-size:12px;margin-top:7px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .tag{border:1px solid var(--line);border-radius:999px;padding:1px 8px;font-size:11px}
+  .warn{color:var(--no);border-color:var(--no)}
+  .track{position:relative;height:6px;background:var(--bar);border-radius:3px;margin-top:9px;opacity:.5}
+  .band{position:absolute;height:6px;background:var(--accent);border-radius:3px;opacity:.85}
+  .foot{color:var(--dim);font-size:12px;margin-top:14px;line-height:1.6}
+  .err{color:var(--no);font-size:13px}
+  label{color:var(--dim);font-size:13px}
+  input{width:52px;background:var(--card);color:var(--ink);border:1px solid var(--line);
+        border-radius:6px;padding:3px 6px;font:inherit;font-size:13px}
+</style>
+<div class="wrap">
+  <h1>Magoun Square &rarr; downtown</h1>
+  <div class="sub">
+    <label>walk <input id="walk" type="number" min="0" max="30" value="6"> min</label>
+    &nbsp;·&nbsp; <span id="status">loading…</span>
+  </div>
+  <div id="list"></div>
+  <div class="foot" id="foot"></div>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const fmt = t => new Date(t*1000).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+
+async function tick(){
+  const walk = Math.max(0, +$('#walk').value || 0);
+  let d;
+  try{
+    d = await (await fetch(`/api?walk=${walk}`, {cache:'no-store'})).json();
+    if(d.error) throw new Error(d.error);
+  }catch(e){
+    $('#status').innerHTML = `<span class="err">offline — ${e.message}</span>`;
+    return;
+  }
+  $('#status').textContent = `updated ${fmt(d.now)}`;
+  const span = 45*60;
+  $('#list').innerHTML = d.trains.map(t => {
+    const mins = (t.eta - d.now)/60;
+    const lo = (t.lo - d.now)/60, hi = (t.hi - d.now)/60;
+    const leave = t.leave_in/60;
+    let cls, act;
+    if(!t.catchable){ cls='no'; act='too late'; }
+    else if(leave <= 0){ cls='go'; act='leave now'; }
+    else if(leave < 3){ cls='wt'; act=`leave in ${leave.toFixed(0)} min`; }
+    else { cls=''; act=`leave in ${leave.toFixed(0)} min`; }
+    const band = Math.round((t.hi - t.lo)/2);
+    const L = Math.max(0, lo*60/span*100), W = Math.max(1.2, (hi-lo)*60/span*100);
+    return `<div class="row">
+      <div class="top">
+        <span class="mins">${mins < 0.5 ? 'now' : mins.toFixed(0)}</span>
+        <span class="clock">${mins<0.5?'':'min · '}${fmt(t.eta)}</span>
+        <span class="act ${cls}">${act}</span>
+      </div>
+      <div class="track"><div class="band" style="left:${L}%;width:${W}%"></div></div>
+      <div class="meta">
+        <span class="tag">${t.source}</span>
+        <span>±${band}s</span>
+        ${t.backed ? '' : '<span class="tag warn">unconfirmed — no train upstream</span>'}
+      </div></div>`;
+  }).join('') || '<div class="row">no trains in the next 45 minutes</div>';
+
+  const u = d.upstream;
+  $('#foot').innerHTML =
+    `Upstream now: ${u.at_terminus} at Medford/Tufts · ${u.departed_med.length} past Medford · `
+    + `${u.departed_ball.length} past Ball Sq. Median headway ${(d.headway_median_s/60).toFixed(1)} min.<br>`
+    + `Bars show the 10th–90th percentile arrival window. “Leave” times target the `
+    + `<em>early</em> edge, because arriving a minute late costs a full headway.`;
+}
+$('#walk').addEventListener('change', tick);
+tick(); setInterval(tick, 15000);
+</script>
