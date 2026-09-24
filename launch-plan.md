@@ -355,6 +355,13 @@ timed pushes ("train in 2 min" / "1 min" / "now") approximate a ticking countdow
 
 ## Known traps
 
+- **MBTA predictions flap by minutes, not seconds.** Observed live on 2026-09-24:
+  a Magoun inbound prediction went 16:23 → 16:31 → 16:23 inside 90 seconds. Any
+  logic that tracks "the train I committed to" must debounce — the first version
+  fired a false "that train vanished" on a single bad tick. Now: re-match at ±300 s,
+  fall back to ±900 s, and require 4 consecutive misses (80 s) before declaring a
+  no-show.
+
 - **Parked trains.** An out-of-service train sat berthed 8+ hours with a frozen
   `updated_at`; it faked a train upstream and silently disabled the no-show veto.
   Positions older than 180 s are ignored — keep it that way.

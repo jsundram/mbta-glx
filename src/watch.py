@@ -23,7 +23,9 @@ import service
 STATE = service.ROOT / "data" / "plan.json"
 TICK = 20.0
 WALK = int(os.environ.get("MAGOUN_WALK_S", "390"))
-MATCH = 300          # a committed train is re-matched within this many seconds
+MATCH = 300          # normal re-match window for a committed train
+WIDE = 900           # fallback window: MBTA predictions flap by several minutes
+MISS_TICKS = 4       # consecutive failed matches before declaring a no-show
 ADJUST_SOURCES = ("departed Medford/Tufts", "departed Ball Sq")
 
 
@@ -88,7 +90,8 @@ class Watcher:
         opts = p.get("options") or []
         if not 0 <= idx < len(opts):
             return
-        p["committed"] = {"target_eta": opts[idx]["eta"], "at": time.time()}
+        p["committed"] = {"target_eta": opts[idx]["eta"], "at": time.time(),
+                          "misses": 0}
         p["fired"] = {}
         p["left_at"] = None
         save(p)
@@ -120,9 +123,24 @@ class Watcher:
             tgt = p["committed"]["target_eta"]
             near = [r for r in rows if abs(r["eta"] - tgt) <= MATCH]
             if not near:
-                self._recover(p, rows, snap)
+                # MBTA predictions flap: one observed jump went 16:23 -> 16:31 ->
+                # 16:23 within 90 s. Widen before giving up, then require several
+                # consecutive misses, or a single noisy tick cries no-show.
+                near = [r for r in rows if abs(r["eta"] - tgt) <= WIDE]
+                if near:
+                    j = min(near, key=lambda r: abs(r["eta"] - tgt))
+                    log(f"target drifted {(j['eta']-tgt)/60:+.1f} min "
+                        f"to {fmt(j['eta'])} (still tracking)")
+            if not near:
+                miss = p["committed"].get("misses", 0) + 1
+                p["committed"]["misses"] = miss
+                log(f"no match for {fmt(tgt)} ({miss}/{MISS_TICKS})")
+                save(p)
+                if miss >= MISS_TICKS:
+                    self._recover(p, rows, snap)
                 return
             row = min(near, key=lambda r: abs(r["eta"] - tgt))
+            p["committed"]["misses"] = 0
             p["committed"]["target_eta"] = row["eta"]
 
             leave_by = row["lo"] - p["walk"]
