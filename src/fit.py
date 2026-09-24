@@ -8,6 +8,10 @@ import polars as pl
 from model import BASE, MAXD, TIERS
 
 OUT = pathlib.Path(__file__).resolve().parent.parent / "data" / "model.json"
+DESTINATIONS = {
+    "70502": "Lechmere", "70206": "North Station", "70202": "Government Center",
+    "70199": "Park Street", "70159": "Boylston", "70155": "Copley",
+}
 GRID = [round(q, 3) for q in np.arange(0.02, 1.0, 0.02)]
 
 
@@ -40,6 +44,29 @@ def main() -> None:
                       "q": [float(x) for x in np.quantile(delta, GRID)],
                       "turn_plus_run": 357, "sched_bias": 60}
 
+    # Ride times Magoun -> each plausible destination, so the notifier can answer
+    # "will this train get me there by T" from the bundle alone.
+    cols = ["service_date", "route_id", "direction_id", "stop_id",
+            "vehicle_id", "trip_id", "stop_timestamp"]
+    ev = pl.concat([
+        pl.read_parquet(f, columns=cols)
+        .filter((pl.col("route_id") == "Green-E") & (~pl.col("direction_id")))
+        for f in sorted((OUT.parent / "raw").glob("*.parquet"))
+    ]).filter(pl.col("stop_timestamp").is_not_null())
+    key = ["service_date", "vehicle_id", "trip_id"]
+    origin = ev.filter(pl.col("stop_id") == "70508").select(
+        *key, pl.col("stop_timestamp").alias("t0"))
+    model["rides"] = {}
+    for stop, name in DESTINATIONS.items():
+        b = ev.filter(pl.col("stop_id") == stop).select(
+            *key, pl.col("stop_timestamp").alias("t1"))
+        r = (origin.join(b, on=key).with_columns(r=pl.col("t1") - pl.col("t0"))
+             .filter(pl.col("r").is_between(60, 5400))["r"].to_numpy().astype(float))
+        if len(r) < 200:
+            continue
+        model["rides"][stop] = {"name": name, "n": int(len(r)),
+                                "q": [float(x) for x in np.quantile(np.sort(r), GRID)]}
+
     hw = df.sort("magoun_arr").with_columns(
         g=pl.col("magoun_arr").diff().over("service_date"))["g"].drop_nulls().to_numpy()
     hw = hw[(hw > 30) & (hw < 7200)]
@@ -51,6 +78,10 @@ def main() -> None:
         q = model["tiers"][t]["q"]
         lo, hi = q[GRID.index(0.1)], q[GRID.index(0.9)]
         print(f"  {t:10s} n={model['tiers'][t]['n']:5d}  q10={lo:6.0f}s q90={hi:6.0f}s  band={hi-lo:5.0f}s")
+    for sid, r in model["rides"].items():
+        print(f"  ride -> {r['name']:18s} n={r['n']:5d}  "
+              f"p10={r['q'][GRID.index(0.1)]/60:5.1f}m p50={r['q'][GRID.index(0.5)]/60:5.1f}m "
+              f"p90={r['q'][GRID.index(0.9)]/60:5.1f}m")
     q = model["berth"]["q"]
     print(f"  {'berth':10s} n={model['berth']['n']:5d}  "
           f"q10={q[GRID.index(0.1)]:6.0f}s q90={q[GRID.index(0.9)]:6.0f}s  "

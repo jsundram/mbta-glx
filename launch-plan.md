@@ -216,7 +216,17 @@ a 6-minute cushion at Park St has a ±3.6 min tail on it.
 - [ ] **Suppression** — no notification while the do-not-leave floor holds
       (nothing berthed ⇒ ≥ 240 s clear at 99.5%).
 
-### Open question — how does it know you left?
+### Resolved: how it knows you left
+
+ntfy's `http` action button posts back to a second topic, so the **On my way** button
+on the leave-now push tells the service directly. No inbound port, no tunnel, no
+static IP, and the notifier stays host-portable. If it is never tapped, the adjust
+push simply does not fire — a missed nudge rather than a wrong one.
+
+**Known limitation:** ntfy.sh does not replay cached messages for anonymous topics,
+so a tap made while the watcher is down is lost. Acceptable — tap again.
+
+### Superseded — how does it know you left?
 
 The adjust ("start jogging") notification needs a reference point. Three options:
 
@@ -298,8 +308,12 @@ timed pushes ("train in 2 min" / "1 min" / "now") approximate a ticking countdow
 
 ### Recommended ladder
 
-- [ ] **5a — ntfy, on this Mac.** ~1 hour. Proves the loop end to end and gets the
-      "Leaving now" button immediately. Do this first regardless of the end state.
+- [x] **5a — ntfy, on this Mac.** Built and verified: `notify.py` (transport),
+      `brief.py` (options + P(on time)), `watch.py` (triggers + commands),
+      `ops/com.magoun.watch.plist`. Live delivery confirmed against ntfy.sh with
+      priority 5 and `http` action buttons intact.
+      **Remaining:** install the ntfy app, subscribe to both topics, run
+      `./ops/install.sh`, then a real morning to shake it out.
 - [ ] **5b — PWA** for the morning brief and train picking. Free, no store, likely final.
 - [ ] **5c — Pushover** if leave-now must pierce Do Not Disturb.
 - [ ] **5d — native app** only if discrete pushes prove insufficient for the countdown.

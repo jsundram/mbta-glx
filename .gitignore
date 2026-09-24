@@ -12,3 +12,5 @@ out/
 __pycache__/
 *.pyc
 .DS_Store
+ops/ntfy.env
+data/plan.json

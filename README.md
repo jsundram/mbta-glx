@@ -16,6 +16,37 @@ uv run python src/service.py 6                   # one-shot CLI, 6-minute walk
 
 Set `MBTA_API_KEY` (free, from api-v3.mbta.com) to lift the keyless rate limit.
 
+## Phone notifications (Phase 5a)
+
+**One-time setup:**
+
+1. Install the **ntfy** app (iOS/Android, free) and subscribe to both topics in
+   `ops/ntfy.env` — the first is service→phone, the second carries button taps back.
+   They are unguessable strings and act as passwords, so the file is gitignored.
+2. Test the channel: `./src/watch.sh` is the runtime; for a one-off check run
+   `set -a && . ops/ntfy.env && set +a && uv run python src/notify.py`.
+3. Install the agent: `./ops/install.sh` (adds `com.magoun.watch`).
+
+**Daily use** — tell it where you need to be, then answer the notifications:
+
+```bash
+./src/watch.sh plan 70199 09:00        # Park Street by 9:00
+./src/watch.sh plan 70206 08:45 0.95   # North Station by 8:45, 95% confidence
+```
+
+Destinations: `70502` Lechmere · `70206` North Station · `70202` Government Center ·
+`70199` Park Street · `70159` Boylston · `70155` Copley.
+
+You get a brief with up to three trains, each a button showing its on-time chance.
+Tap one to commit. Then **Leave now** fires at the right moment (priority 5), with
+*On my way* / *Next one* / *Cancel*. Tapping *On my way* arms the **adjust** push,
+which lands once the train is actually moving and says whether to ease up or hurry.
+If the committed train never runs — 9.6% of them don't — a **recovery** push offers
+the next one. Four notifications normally, six in the worst case.
+
+Button taps travel back over a second ntfy topic, so the notifier needs no inbound
+port, tunnel or static IP, and moves to a cloud host unchanged.
+
 ## What the history says
 
 35 days of MBTA LAMP stop events (2026-08-18 → 09-23), 4,418 real inbound arrivals
