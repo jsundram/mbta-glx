@@ -366,6 +366,15 @@ timed pushes ("train in 2 min" / "1 min" / "now") approximate a ticking countdow
 
 ## Known traps
 
+- **Never widen a re-match far enough to reach the next train.** The first fix for
+  prediction flap used a ±900 s window; with an 8.8 min headway that silently
+  re-pointed the commitment at the *following* train, twice in a row (+6.9 min each
+  time), so leave-now never fired while real trains came and went. Match on vehicle
+  identity first, and cap positional drift at 0.45 × headway.
+- **Count arrivals as transitions into STOPPED_AT.** Keying on `(vehicle, stop)` for
+  a whole day records only each vehicle's first visit; trains cycle through Magoun
+  repeatedly, measured at a **30% undercount over three hours**. This corrupted the
+  prediction-error calibration until fixed.
 - **MBTA predictions flap by minutes, not seconds.** Observed live on 2026-09-24:
   a Magoun inbound prediction went 16:23 → 16:31 → 16:23 inside 90 seconds. Any
   logic that tracks "the train I committed to" must debounce — the first version

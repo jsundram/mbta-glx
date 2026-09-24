@@ -26,6 +26,7 @@ WALK = int(os.environ.get("MAGOUN_WALK_S", "390"))
 MATCH = 300          # normal re-match window for a committed train
 WIDE = 900           # fallback window: MBTA predictions flap by several minutes
 MISS_TICKS = 4       # consecutive failed matches before declaring a no-show
+DRIFT_ALERT = 240    # tell the rider once their train slips this far
 ADJUST_SOURCES = ("departed Medford/Tufts", "departed Ball Sq")
 
 
@@ -84,15 +85,18 @@ class Watcher:
                                        f"pick {i}", clear=True)
                    for i, o in enumerate(pickable)]
         notify.send(title, body, priority=3, tags=["tram"], actions=actions)
-        p["options"] = [{"eta": o["eta"], "p": o["p_ontime"]} for o in pickable]
+        p["options"] = [{"eta": o["eta"], "p": o["p_ontime"],
+                         "vehicle": o.get("vehicle")} for o in pickable]
         save(p)
 
     def commit(self, p: dict, idx: int) -> None:
         opts = p.get("options") or []
         if not 0 <= idx < len(opts):
             return
-        p["committed"] = {"target_eta": opts[idx]["eta"], "at": time.time(),
-                          "misses": 0}
+        p["committed"] = {"target_eta": opts[idx]["eta"],
+                          "original_eta": opts[idx]["eta"],
+                          "vehicle": opts[idx].get("vehicle"),
+                          "at": time.time(), "misses": 0}
         p["fired"] = {}
         p["left_at"] = None
         save(p)
@@ -121,13 +125,19 @@ class Watcher:
                 return
             snap, b = self._snapshot()
             rows = service.etas(snap, self.model, p["walk"], berths=b)
-            tgt = p["committed"]["target_eta"]
-            near = [r for r in rows if abs(r["eta"] - tgt) <= MATCH]
+            com = p["committed"]
+            tgt = com["target_eta"]
+            vid = com.get("vehicle")
+            # Identity first: a vehicle id is proof this is the same train.
+            same = [r for r in rows if vid and r.get("vehicle") == vid]
+            near = same or [r for r in rows if abs(r["eta"] - tgt) <= MATCH]
             if not near:
                 # MBTA predictions flap: one observed jump went 16:23 -> 16:31 ->
-                # 16:23 within 90 s. Widen before giving up, then require several
-                # consecutive misses, or a single noisy tick cries no-show.
-                near = [r for r in rows if abs(r["eta"] - tgt) <= WIDE]
+                # 16:23 within 90 s, so widen before giving up. But never widen far
+                # enough to swallow the NEXT train -- a headway away is a different
+                # train, and silently re-pointing at it means leave-now never fires.
+                limit = min(WIDE, self.model.headway * 0.45)
+                near = [r for r in rows if abs(r["eta"] - tgt) <= limit]
                 if near:
                     j = min(near, key=lambda r: abs(r["eta"] - tgt))
                     log(f"target drifted {(j['eta']-tgt)/60:+.1f} min "
@@ -141,8 +151,21 @@ class Watcher:
                     self._recover(p, rows, snap)
                 return
             row = min(near, key=lambda r: abs(r["eta"] - tgt))
-            p["committed"]["misses"] = 0
-            p["committed"]["target_eta"] = row["eta"]
+            com["misses"] = 0
+            com["target_eta"] = row["eta"]
+            if row.get("vehicle"):
+                com["vehicle"] = row["vehicle"]
+            # A train slipping several minutes changes the rider's plan; say so once.
+            slip = row["eta"] - com.get("original_eta", row["eta"])
+            if slip >= DRIFT_ALERT and not p["fired"].get("slip"):
+                notify.send(
+                    "Your train is running late",
+                    f"Now {fmt(row['eta'])} ({slip/60:+.0f} min). "
+                    f"Leave {fmt(row['lo'] - p['walk'])}.",
+                    priority=3, tags=["hourglass"],
+                    actions=[notify.reply_action("Show options", "brief")])
+                p["fired"]["slip"] = True
+                log(f"fired SLIP alert: {slip/60:+.1f} min")
 
             leave_by = row["lo"] - p["walk"]
             now = snap["t"]

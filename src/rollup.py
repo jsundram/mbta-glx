@@ -30,7 +30,12 @@ SCHEMA = {
 
 def rollup_day(path: pathlib.Path) -> pl.DataFrame:
     day = re.search(r"(\d{4}-\d{2}-\d{2})", path.name).group(1)
-    actual: dict[tuple[str, str], float] = {}
+    # Arrivals must be counted as TRANSITIONS into STOPPED_AT. Keying on
+    # (vehicle, stop) for a whole day records only each vehicle's first visit,
+    # and trains cycle through Magoun many times a day -- measured at a 30%
+    # undercount over three hours, worse over a full day.
+    actual: dict[tuple[str, str], list[float]] = {}
+    prev: dict[str, tuple] = {}
     preds: list[tuple] = []
     with gzip.open(path, "rt") as f:
         for line in f:
@@ -40,16 +45,21 @@ def rollup_day(path: pathlib.Path) -> pl.DataFrame:
             snap = json.loads(line)
             t = snap["t"]
             for v in snap["vehicles"]:
-                if v.get("status") == "STOPPED_AT" and v.get("stop"):
-                    actual.setdefault((v["id"], v["stop"]), t)
+                cur = (v.get("stop"), v.get("status"))
+                if (v.get("status") == "STOPPED_AT" and v.get("stop")
+                        and prev.get(v["id"]) != cur):
+                    actual.setdefault((v["id"], v["stop"]), []).append(t)
+                prev[v["id"]] = cur
             for p in snap["preds"]:
                 if p.get("arr") and p.get("veh"):
                     preds.append((p["veh"], p["stop"], p.get("dir"), p.get("route"),
                                   p.get("trip"), t, p["arr"], p.get("unc")))
     rows = []
     for veh, stop, d, route, trip, made, pred, unc in preds:
-        a = actual.get((veh, stop))
-        if a is None or made >= a:
+        # Pair each prediction with the next arrival of that vehicle at that stop.
+        times = actual.get((veh, stop))
+        a = next((x for x in times if x > made), None) if times else None
+        if a is None:
             continue
         rows.append({
             "day": day, "stop": stop, "dir": d, "route": route, "veh": veh,

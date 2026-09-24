@@ -36,14 +36,18 @@ def _epoch(v):
 
 
 def main(paths):
-    actual: dict[str, float] = {}
+    actual: dict[str, list[float]] = {}     # vehicle -> every arrival, not just the first
+    prev: dict[str, tuple] = {}
     preds = collections.defaultdict(list)   # vehicle -> [(made_at, predicted_arr)]
     for snap in load(paths):
         t = snap["t"]
         for v in snap["vehicles"]:
-            if (v["dir"] == 0 and v["stop"] == MAGOUN_IN
-                    and v["status"] == "STOPPED_AT"):
-                actual.setdefault(v["id"], t)
+            cur = (v.get("stop"), v.get("status"))
+            if (v.get("dir") == 0 and v.get("stop") == MAGOUN_IN
+                    and v.get("status") == "STOPPED_AT"
+                    and prev.get(v["id"]) != cur):
+                actual.setdefault(v["id"], []).append(t)
+            prev[v["id"]] = cur
         for p in snap["preds"]:
             if p["stop"] != MAGOUN_IN or p["dir"] != 0 or not p["arr"]:
                 continue
@@ -53,16 +57,18 @@ def main(paths):
             preds[vid].append((t, _epoch(p["arr"]), p.get("unc")))
 
     rows = []
-    for vid, arr in actual.items():
+    for vid, times in actual.items():
         for made, pred, unc in preds.get(vid, []):
-            if made < arr and pred is not None:
+            arr = next((x for x in times if x > made), None)
+            if arr is not None and pred is not None:
                 rows.append((arr - made, pred - arr, unc))  # lead, signed error, stated unc
     if not rows:
         print("no completed arrivals with prior predictions yet; let the recorder run")
         return
     lead = np.array([r[0] for r in rows])
     err = np.array([r[1] for r in rows])
-    print(f"{len(rows)} (prediction, outcome) pairs across {len(actual)} arrivals\n")
+    n_arr = sum(len(v) for v in actual.values())
+    print(f"{len(rows)} (prediction, outcome) pairs across {n_arr} arrivals\n")
     print(f"{'lead time':>14} {'n':>5} {'p10 err':>8} {'median':>8} {'p90 err':>8} {'band':>7}")
     for lo, hi in [(0, 120), (120, 300), (300, 600), (600, 900), (900, 1800)]:
         m = (lead >= lo) & (lead < hi)
