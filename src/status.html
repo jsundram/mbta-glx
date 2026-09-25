@@ -34,40 +34,50 @@
   .list{background:var(--card);border:1px solid var(--line);border-radius:10px;
         padding:4px 16px;margin-bottom:12px}
   .k{color:var(--dim)} .v{font-family:var(--mono);font-variant-numeric:tabular-nums}
-  /* line map: one rail per direction, stop names between them */
+  /* line map, drawn the way the T draws it: a thick line in the route colour,
+     white-centred station dots, terminus capped. */
   .map{background:var(--card);border:1px solid var(--line);border-radius:10px;
-       padding:16px 14px 12px;margin-bottom:12px}
-  .term{display:flex;align-items:center;justify-content:center;gap:10px;
-        border:1px solid var(--line);border-radius:8px;padding:8px 12px;
-        background:color-mix(in srgb,var(--go) 7%,transparent)}
-  .term b{font-size:13px;font-weight:600}
-  .term .cars{display:flex;gap:4px;min-height:11px;align-items:center}
-  .grid{position:relative;display:grid;padding-top:22px;
-        grid-template-columns:34px 1fr 34px;align-items:center}
-  .rail{position:absolute;top:0;bottom:0;width:3px;border-radius:2px;
-        background:var(--line)}
-  .rail.l{left:16px} .rail.r{right:16px}
-  .stopname{text-align:center;font-size:13px;color:var(--dim);
-            padding:9px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .stopname.me{color:var(--ink);font-weight:600}
-  .node{position:absolute;width:9px;height:9px;border-radius:50%;
-        background:var(--bg);border:2.5px solid var(--line);
-        transform:translate(-50%,-50%)}
-  .node.l{left:17.5px} .node.r{right:17.5px;transform:translate(50%,-50%)}
-  .node.me{border-color:var(--go);width:11px;height:11px}
-  .train{position:absolute;width:15px;height:15px;border-radius:4px;
-         background:var(--go);transform:translate(-50%,-50%);
-         display:flex;align-items:center;justify-content:center;
-         transition:top .6s linear;box-shadow:0 0 0 3px var(--card)}
-  .train.l{left:17.5px} .train.r{right:17.5px;transform:translate(50%,-50%)}
-  .train.moving{opacity:.65;border-radius:50%}
-  .train.stale{background:var(--dim);opacity:.4}
-  .train.deadhead{background:transparent;border:2px dashed var(--dim);opacity:.7}
-  .train.deadhead::after{display:none}
-  .train::after{content:"";width:5px;height:5px;border-radius:1px;background:var(--card)}
+       padding:16px 14px 14px;margin-bottom:12px}
   .maphead{display:flex;justify-content:space-between;font-size:11px;
            letter-spacing:.08em;text-transform:uppercase;color:var(--dim);
-           margin-bottom:8px;padding:0 2px}
+           margin-bottom:10px;padding:0 2px}
+  .term{display:flex;align-items:center;justify-content:center;gap:10px;
+        border:2px solid var(--go);border-radius:999px;padding:7px 14px;
+        background:color-mix(in srgb,var(--go) 10%,var(--card))}
+  .term b{font-size:13px;font-weight:700;letter-spacing:.01em;color:var(--ink)}
+  .term .cars{display:flex;gap:5px;min-height:14px;align-items:center}
+  .grid{position:relative;display:grid;padding-top:24px;
+        grid-template-columns:40px 1fr 40px;align-items:center}
+  .rail{position:absolute;top:-2px;bottom:6px;width:7px;border-radius:4px;
+        background:var(--go)}
+  .rail.l{left:16px} .rail.r{right:16px}
+  .stopname{text-align:center;font-size:13.5px;color:var(--ink);
+            padding:11px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .stopname.me{font-weight:700}
+  /* station: white centre, route-colour ring -- the T's standard marker */
+  .node{position:absolute;width:13px;height:13px;border-radius:50%;
+        background:var(--card);border:3px solid var(--go);
+        transform:translate(-50%,-50%);box-sizing:border-box}
+  .node.l{left:19.5px} .node.r{right:19.5px;transform:translate(50%,-50%)}
+  .node.me{width:17px;height:17px;border-width:4px}
+  /* train: a car on the track, not another dot -- a pill with a nose */
+  .train{position:absolute;width:15px;height:23px;border-radius:6px;
+         background:var(--ink);transform:translate(-50%,-50%);
+         transition:top .6s linear;box-shadow:0 0 0 2.5px var(--card);
+         display:flex;align-items:flex-end;justify-content:center}
+  .train.l{left:19.5px} .train.r{right:19.5px;transform:translate(50%,-50%)}
+  .train::before{content:"";position:absolute;left:50%;transform:translateX(-50%);
+        border-left:4px solid transparent;border-right:4px solid transparent}
+  .train.l::before{bottom:3px;border-top:5px solid var(--card)}   /* nose down */
+  .train.r::before{top:3px;border-bottom:5px solid var(--card)}   /* nose up */
+  .train.moving{animation:glide 1.6s ease-in-out infinite}
+  @keyframes glide{0%,100%{opacity:1}50%{opacity:.55}}
+  .train.stale{background:var(--dim);opacity:.45;animation:none}
+  .train.deadhead{background:var(--card);border:2px dashed var(--dim)}
+  .train.deadhead::before{border-top-color:var(--dim);border-bottom-color:var(--dim)}
+  @media (prefers-reduced-motion:reduce){
+    .train{transition:none} .train.moving{animation:none;opacity:.7}
+  }
   .foot{color:var(--dim);font-size:12px;margin-top:14px;line-height:1.6}
   .stale{opacity:.45}
   .dot{display:inline-block;width:7px;height:7px;border-radius:50%;

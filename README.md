@@ -16,10 +16,12 @@ uv run --with polars python src/server.py 8723   # then open:
 uv run python src/service.py 6                   # one-shot CLI, 6-minute walk
 ```
 
-**The board** carries a live GLX line map — Medford/Tufts at the top with the trains
-waiting to turn around, inbound trains running *down* the left rail toward Magoun,
-outbound trains running *up* the right rail toward the terminus. Square markers are
-stopped, round ones are moving, grey ones are stale positions. Because today's
+**The board** carries a live GLX line map, drawn the way the T draws it — a thick
+route-coloured line, white-centred station markers, the terminus capped — with Medford/Tufts at the top holding the
+trains waiting to turn around, inbound running *down* the left rail toward Magoun
+and outbound *up* the right rail toward the terminus. Trains are drawn as cars with
+a nose pointing the way they travel, so they never read as another station dot;
+moving ones pulse, stale positions grey out, non-revenue trains are dashed. Because today's
 inbound train is yesterday's outbound train, the right rail is a preview of the left.
 
 It also answers one question at a glance: *next train expected in MM:SS*, or

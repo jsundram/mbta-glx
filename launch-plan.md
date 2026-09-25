@@ -212,8 +212,31 @@ looks like a genuine skip, putting real skips near **0.1%**.
 A neighbouring stop shows *higher* miss rates (Gilman 0.77% inbound), which
 confirms the measurement is dominated by capture gaps, not operations.
 
-So an observed express through Magoun is almost certainly a **non-revenue** train —
-which LAMP excludes but the live vehicle feed does not. See Known Traps.
+**Caveat — and a correction.** Attributing an observed express to a non-revenue
+train was wrong. A rider reported twice riding an outbound evening train that
+stopped at Lechmere or East Somerville, offloaded everyone not bound for
+Medford/Tufts, and ran express. That is scheduled-service short-turning, not a
+deadhead.
+
+Re-run keyed by `vehicle_id` instead of `trip_id` (the trip is re-labelled
+mid-run, which is why the first pass was blind to it), 254 outbound hops skip two
+or more stops. But they do not survive a physics check:
+
+- **174 are physically impossible** — e.g. Lechmere→Medford/Tufts in 2.1 min
+  against a 12.2 min all-stops run. Feed gaps or vehicle-id reuse.
+- **80 are plausible in duration, but take the all-stops time anyway**
+  (338 s observed vs 324 s expected; 735 s vs 703 s). A real express saves the
+  dwell at each skipped stop, roughly 40 s apiece. These did not.
+
+So **LAMP shows no clear signature of express running**, while the rider has
+observed it directly. The likely explanation is that such runs are re-labelled or
+dropped from the performance dataset, not that they do not happen. Treat the 0.1%
+skip figure as "skips that LAMP records", not as ground truth.
+
+- [ ] **Detect express runs from the live archive instead.** `record_rt.py` samples
+      vehicle positions every 15 s, so a train passing Magoun outbound without ever
+      reporting `STOPPED_AT` there is directly observable, independent of how the
+      trip is labelled. This is the only way to get a real rate.
 
 ## Phase 3 — Journey model  (new; falls out of the ride-time finding)
 
