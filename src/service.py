@@ -246,10 +246,14 @@ def line_map(snap: dict) -> list[dict]:
         stopped = a["current_status"] == "STOPPED_AT"
         # Inbound runs down the list, outbound runs up it.
         pos = idx if stopped else (idx - 0.5 if inbound else idx + 0.5)
+        # `label` is the real coupled car numbers, e.g. "3677-3875"; the lead car
+        # is what is painted on the front of the train you actually board.
+        cars = [c.get("label") for c in (a.get("carriages") or []) if c.get("label")]
         out.append({
             "id": v["id"], "dir": 0 if inbound else 1, "pos": round(pos, 2),
             "stopped": stopped, "stale": not _live(a, snap["t"]),
             "revenue": _revenue(a),
+            "label": a.get("label"), "car": cars[0] if cars else None,
             "route": (rel["route"]["data"] or {}).get("id"),
         })
     return out

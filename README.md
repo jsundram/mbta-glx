@@ -19,9 +19,12 @@ uv run python src/service.py 6                   # one-shot CLI, 6-minute walk
 **The board** carries a live GLX line map, drawn the way the T draws it — a thick
 route-coloured line, white-centred station markers, the terminus capped — with Medford/Tufts at the top holding the
 trains waiting to turn around, inbound running *down* the left rail toward Magoun
-and outbound *up* the right rail toward the terminus. Trains are drawn as cars with
-a nose pointing the way they travel, so they never read as another station dot;
-moving ones pulse, stale positions grey out, non-revenue trains are dashed. Because today's
+and outbound *up* the right rail toward the terminus. Trains are drawn as little cars — windscreen and
+headlights at the leading end, so they never read as another station dot — each
+labelled with its **lead car number** (`3620`, `3718`). That is the number painted
+on the front of the train you board, taken from the feed's `carriages`, not an
+internal id. Moving cars pulse, stale positions fade, non-revenue trains are
+hatched, and trains waiting to turn around sit in the terminus pill. Because today's
 inbound train is yesterday's outbound train, the right rail is a preview of the left.
 
 Below the map it scores itself: the **last 10 trains**, each showing when "leave

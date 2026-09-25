@@ -48,35 +48,51 @@
         background:color-mix(in srgb,var(--go) 10%,var(--card))}
   .term b{font-size:13px;font-weight:700;letter-spacing:.01em;color:var(--ink)}
   .term .cars{display:flex;gap:5px;min-height:14px;align-items:center}
-  .grid{position:relative;display:grid;padding-top:24px;
-        grid-template-columns:40px 1fr 40px;align-items:center}
+  .waitcar{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--card);
+           background:var(--go);border-radius:4px;padding:2px 5px;letter-spacing:-.02em}
+  .grid{position:relative;display:grid;padding-top:34px;
+        grid-template-columns:64px 1fr 64px;align-items:center}
   .rail{position:absolute;top:-2px;bottom:6px;width:7px;border-radius:4px;
-        background:var(--go)}
-  .rail.l{left:16px} .rail.r{right:16px}
+        background:var(--go);z-index:0}
+  .rail.l{left:44px} .rail.r{right:44px}
   .stopname{text-align:center;font-size:13.5px;color:var(--ink);
             padding:11px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .stopname.me{font-weight:700}
   /* station: white centre, route-colour ring -- the T's standard marker */
   .node{position:absolute;width:13px;height:13px;border-radius:50%;
         background:var(--card);border:3px solid var(--go);
-        transform:translate(-50%,-50%);box-sizing:border-box}
-  .node.l{left:19.5px} .node.r{right:19.5px;transform:translate(50%,-50%)}
+        transform:translate(-50%,-50%);box-sizing:border-box;z-index:1}
+  .node.l{left:47.5px} .node.r{right:47.5px;transform:translate(50%,-50%)}
   .node.me{width:17px;height:17px;border-width:4px}
-  /* train: a car on the track, not another dot -- a pill with a nose */
-  .train{position:absolute;width:15px;height:23px;border-radius:6px;
-         background:var(--ink);transform:translate(-50%,-50%);
-         transition:top .6s linear;box-shadow:0 0 0 2.5px var(--card);
-         display:flex;align-items:flex-end;justify-content:center}
-  .train.l{left:19.5px} .train.r{right:19.5px;transform:translate(50%,-50%)}
-  .train::before{content:"";position:absolute;left:50%;transform:translateX(-50%);
-        border-left:4px solid transparent;border-right:4px solid transparent}
-  .train.l::before{bottom:3px;border-top:5px solid var(--card)}   /* nose down */
-  .train.r::before{top:3px;border-bottom:5px solid var(--card)}   /* nose up */
-  .train.moving{animation:glide 1.6s ease-in-out infinite}
-  @keyframes glide{0%,100%{opacity:1}50%{opacity:.55}}
-  .train.stale{background:var(--dim);opacity:.45;animation:none}
-  .train.deadhead{background:var(--card);border:2px dashed var(--dim)}
-  .train.deadhead::before{border-top-color:var(--dim);border-bottom-color:var(--dim)}
+  /* train: a little car, nose-first, carrying its lead car number */
+  .grid{--carw:19px;--carh:27px}
+  .train{position:absolute;width:var(--carw);height:var(--carh);border-radius:7px;
+         background:linear-gradient(180deg,#2c3a31,#16201b);
+         transform:translate(-50%,-50%);transition:top .6s linear;z-index:3;
+         box-shadow:0 0 0 2.5px var(--card),0 1px 3px rgba(0,0,0,.35)}
+  :root:not([data-theme="light"]) .train{background:linear-gradient(180deg,#3a4a40,#232c26)}
+  .train.l{left:47.5px} .train.r{right:47.5px;transform:translate(50%,-50%)}
+  /* windscreen at the leading end + two headlights */
+  .train .glass{position:absolute;left:3px;right:3px;height:7px;border-radius:4px;
+        background:color-mix(in srgb,var(--go) 55%,#cfe9d8)}
+  .train.l .glass{bottom:3px} .train.r .glass{top:3px}
+  .train .lamp{position:absolute;width:3px;height:3px;border-radius:50%;
+        background:#ffe9a8;opacity:.9}
+  .train.l .lamp{bottom:0.5px} .train.r .lamp{top:0.5px}
+  .train .lamp.a{left:3.5px} .train .lamp.b{right:3.5px}
+  /* the car number, parked outside the rail so it never covers the line */
+  .carno{position:absolute;font-family:var(--mono);font-size:10px;font-weight:600;
+         color:var(--dim);background:var(--card);border:1px solid var(--line);
+         border-radius:4px;padding:1px 4px;transform:translateY(-50%);
+         transition:top .6s linear;letter-spacing:-.02em;line-height:1.3;
+         white-space:nowrap;z-index:4}
+  .carno.l{left:0} .carno.r{right:0}
+  .train.moving{animation:glide 1.8s ease-in-out infinite}
+  @keyframes glide{0%,100%{filter:brightness(1)}50%{filter:brightness(1.35)}}
+  .train.stale{opacity:.4;animation:none}
+  .train.deadhead{background:repeating-linear-gradient(45deg,
+        var(--dim) 0 3px,transparent 3px 6px);opacity:.75}
+  .train.deadhead .glass{background:var(--card);opacity:.6}
   @media (prefers-reduced-motion:reduce){
     .train{transition:none} .train.moving{animation:none;opacity:.7}
   }
@@ -241,28 +257,50 @@ function drawMap() {
     if (t.dir === 0 && t.pos <= 0.01 && t.stopped) continue;  // shown in terminus box
     want.set(t.id, t);
   }
-  for (const el of [...g.querySelectorAll(".train")])
+  for (const el of [...g.querySelectorAll(".train,.carno")])
     if (!want.has(el.dataset.id)) el.remove();
+  // Two trains can share a position; nudge them apart so both stay readable.
+  const used = {0: [], 1: []};
   for (const [id, t] of want) {
+    let y = posY(t.pos);
+    const lane = used[t.dir];
+    while (lane.some(v => Math.abs(v - y) < 20)) y += 20;
+    lane.push(y);
+
     let el = g.querySelector(`.train[data-id="${CSS.escape(id)}"]`);
     if (!el) {
       el = document.createElement("div");
       el.dataset.id = id;
+      el.innerHTML = `<span class="glass"></span>`
+        + `<span class="lamp a"></span><span class="lamp b"></span>`;
       g.appendChild(el);
     }
     el.className = "train " + (t.dir === 0 ? "l" : "r")
       + (t.stopped ? "" : " moving") + (t.stale ? " stale" : "")
       + (t.revenue === false ? " deadhead" : "");
-    el.style.top = posY(t.pos) + "px";
-    el.title = id + (t.stopped ? " stopped" : " moving")
-      + (t.revenue === false ? " — not in service, runs express" : "");
+    el.style.top = y + "px";
+    el.title = (t.label || id) + (t.stopped ? " · stopped" : " · moving")
+      + (t.revenue === false ? " · not in service, runs express" : "");
+
+    let tag = g.querySelector(`.carno[data-id="${CSS.escape(id)}"]`);
+    if (t.car) {
+      if (!tag) {
+        tag = document.createElement("div");
+        tag.dataset.id = id;
+        g.appendChild(tag);
+      }
+      tag.className = "carno " + (t.dir === 0 ? "l" : "r");
+      tag.textContent = t.car;
+      tag.style.top = y + "px";
+      tag.title = t.label || "";
+    } else if (tag) tag.remove();
   }
 
   // Terminus box: inbound trains berthed at Medford/Tufts, ready to come back.
   const atTerm = (data.line || []).filter(t => t.dir === 0 && t.pos <= 0.01 && t.stopped);
   $("#termCars").innerHTML = atTerm.length
-    ? atTerm.map(t => `<span class="train" style="position:static;transform:none"
-        title="${t.id}"></span>`).join("")
+    ? atTerm.map(t => `<span class="waitcar" title="${t.label || t.id}">`
+        + `${t.car || "?"}</span>`).join("")
     : `<span style="font-size:12px;color:var(--dim)">no trains waiting</span>`;
 }
 

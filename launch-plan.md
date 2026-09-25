@@ -361,6 +361,11 @@ locally at 250 ms between 5 s polls so the countdown is smooth, keeps painting f
 the last good reading when the server is unreachable (and marks itself stale), and
 self-reloads when the server restarts with new code.
 
+Trains on the map carry their **lead car number** from the feed's `carriages`
+field (`label` is the coupled pair, e.g. `3620-3819`). That is the number on the
+front of the train, so what the board says matches what the rider sees pull in —
+worth far more than the internal `G-10222` vehicle id.
+
 A live GLX line map sits under the countdown: terminus at top, inbound running down
 the left rail, outbound running up the right. The right rail is the long-horizon
 signal made visible — those trains become the inbound ones after the turnaround.
