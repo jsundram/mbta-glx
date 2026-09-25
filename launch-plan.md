@@ -195,6 +195,26 @@ quantile is within 3 points of nominal (q10 → 7–13% actual). Sharpness is ex
 
 ---
 
+## Measured: do trains skip Magoun?
+
+Essentially never, for revenue service. Given a trip that stopped on *both* sides:
+
+| direction | trips | no stop at Magoun |
+|---|---|---|
+| inbound | 4,262 | 14 (**0.33%**) |
+| outbound | 4,752 | 7 (**0.15%**) |
+
+And most of those are feed gaps rather than skips: the Ball→Gilman elapsed time for
+the 15 inbound cases has a **median of 217 s against a normal 210 s**, i.e. the
+train stopped and the event was simply not recorded. Only the fast tail (p10 97 s)
+looks like a genuine skip, putting real skips near **0.1%**.
+
+A neighbouring stop shows *higher* miss rates (Gilman 0.77% inbound), which
+confirms the measurement is dominated by capture gaps, not operations.
+
+So an observed express through Magoun is almost certainly a **non-revenue** train —
+which LAMP excludes but the live vehicle feed does not. See Known Traps.
+
 ## Phase 3 — Journey model  (new; falls out of the ride-time finding)
 
 Predicting arrival at Magoun is the smaller half of the problem.
@@ -413,6 +433,13 @@ timed pushes ("train in 2 min" / "1 min" / "now") approximate a ticking countdow
   a whole day records only each vehicle's first visit; trains cycle through Magoun
   repeatedly, measured at a **30% undercount over three hours**. This corrupted the
   prediction-error calibration until fixed.
+- **Non-revenue trains are in the live feed and run express.** They appear in
+  GTFS-RT VehiclePositions like any other train, so without filtering, a deadhead
+  parked at Medford/Tufts satisfies the no-show veto and one passing Magoun reads
+  as "train at the station". The v3 JSON API exposes `revenue`
+  (`REVENUE`/`NON_REVENUE`); **the protobuf feed does not** — its TripDescriptor
+  carries only the standard fields. They are excluded from the veto, the berth
+  tracker and at-station detection, and drawn dashed on the map.
 - **A vehicle missing from one poll has not left the platform.** Treating absence as
   departure reset the dwell counter to zero and then made it jump. Grace period of
   75 s for vehicles missing from the feed; a vehicle *seen elsewhere* clears at once.

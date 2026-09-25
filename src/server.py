@@ -70,8 +70,16 @@ class Handler(BaseHTTPRequestHandler):
                 now = snap["t"]
                 slots = service.schedule_today(
                     __import__("datetime").datetime.fromtimestamp(now, service.TZ).date())
+                line = service.line_map(snap)
+                # A train is only "at the station" if the same snapshot also places
+                # it stopped at Magoun. Otherwise the hero and the map can disagree,
+                # which is worse than either being briefly wrong on its own.
+                at_magoun = {t["id"] for t in line
+                             if t["dir"] == 0 and t["stopped"] and t["pos"] == 2.0}
                 here = []
                 for vid, since in _cache.get("here", {}).items():
+                    if vid not in at_magoun:
+                        continue
                     sched = _nearest_scheduled(since, slots)
                     here.append({"vehicle": vid, "since": since,
                                  "dwell_s": now - since,
@@ -86,7 +94,7 @@ class Handler(BaseHTTPRequestHandler):
                     "following": [{"eta": r["eta"], "source": r["source"]}
                                   for r in rows[1:4]],
                     "upstream": service.upstream_state(snap),
-                    "line": service.line_map(snap),
+                    "line": line,
                     "stops": [n for n, _, _ in service.GLX_STOPS],
                     "recent": _arrivals.recent[-5:],
                     "headway_median_s": _model.headway,

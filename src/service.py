@@ -125,6 +125,7 @@ class ArrivalTracker:
         for v in snap["vehicles"]:
             a, rel = v["attributes"], v["relationships"]
             at_our_stop = (a["direction_id"] == direction
+                           and _revenue(a)
                            and (rel["stop"]["data"] or {}).get("id") == stop
                            and a["current_status"] == "STOPPED_AT")
             if not at_our_stop:
@@ -167,7 +168,7 @@ class BerthTracker:
         now, present = snap["t"], set()
         for v in snap["vehicles"]:
             a, rel = v["attributes"], v["relationships"]
-            if not _live(a, now):
+            if not _live(a, now) or not _revenue(a):
                 continue
             stop = (rel["stop"]["data"] or {}).get("id")
             if stop == MED_IN and a["direction_id"] == 0:
@@ -187,6 +188,16 @@ def _live(attrs: dict, now: float) -> bool:
     """False for stale positions: parked, out-of-service trains sit for hours."""
     u = _iso(attrs.get("updated_at"))
     return u is not None and (now - u) <= STALE_VEHICLE
+
+
+def _revenue(attrs: dict) -> bool:
+    """A non-revenue train runs express and cannot be boarded.
+
+    It still appears in the vehicle feed, so without this a deadhead at the
+    terminus satisfies the no-show veto and a deadhead passing Magoun reads as
+    "train at the station". The v3 API exposes this; the protobuf feed does not.
+    """
+    return attrs.get("revenue", "REVENUE") != "NON_REVENUE"
 
 
 def _iso(s: str | None) -> float | None:
@@ -238,6 +249,7 @@ def line_map(snap: dict) -> list[dict]:
         out.append({
             "id": v["id"], "dir": 0 if inbound else 1, "pos": round(pos, 2),
             "stopped": stopped, "stale": not _live(a, snap["t"]),
+            "revenue": _revenue(a),
             "route": (rel["route"]["data"] or {}).get("id"),
         })
     return out
@@ -245,12 +257,16 @@ def line_map(snap: dict) -> list[dict]:
 
 def upstream_state(snap: dict) -> dict:
     """Where each inbound GLX train is right now, from vehicle positions."""
-    out = {"departed_ball": [], "departed_med": [], "at_terminus": 0, "ghosts": 0}
+    out = {"departed_ball": [], "departed_med": [], "at_terminus": 0,
+           "ghosts": 0, "non_revenue": 0}
     for v in snap["vehicles"]:
         a, rel = v["attributes"], v["relationships"]
         stop = (rel["stop"]["data"] or {}).get("id")
         if not _live(a, snap["t"]):
             out["ghosts"] += 1
+            continue
+        if not _revenue(a):
+            out["non_revenue"] += 1
             continue
         if a["direction_id"] != 0:
             # Outbound train sitting at / approaching the Medford/Tufts terminus.

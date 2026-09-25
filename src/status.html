@@ -39,10 +39,10 @@
        padding:16px 14px 12px;margin-bottom:12px}
   .term{display:flex;align-items:center;justify-content:center;gap:10px;
         border:1px solid var(--line);border-radius:8px;padding:8px 12px;
-        margin-bottom:2px;background:color-mix(in srgb,var(--go) 7%,transparent)}
+        background:color-mix(in srgb,var(--go) 7%,transparent)}
   .term b{font-size:13px;font-weight:600}
   .term .cars{display:flex;gap:4px;min-height:11px;align-items:center}
-  .grid{position:relative;display:grid;
+  .grid{position:relative;display:grid;padding-top:22px;
         grid-template-columns:34px 1fr 34px;align-items:center}
   .rail{position:absolute;top:0;bottom:0;width:3px;border-radius:2px;
         background:var(--line)}
@@ -62,10 +62,12 @@
   .train.l{left:17.5px} .train.r{right:17.5px;transform:translate(50%,-50%)}
   .train.moving{opacity:.65;border-radius:50%}
   .train.stale{background:var(--dim);opacity:.4}
+  .train.deadhead{background:transparent;border:2px dashed var(--dim);opacity:.7}
+  .train.deadhead::after{display:none}
   .train::after{content:"";width:5px;height:5px;border-radius:1px;background:var(--card)}
   .maphead{display:flex;justify-content:space-between;font-size:11px;
            letter-spacing:.08em;text-transform:uppercase;color:var(--dim);
-           margin-bottom:6px}
+           margin-bottom:8px;padding:0 2px}
   .foot{color:var(--dim);font-size:12px;margin-top:14px;line-height:1.6}
   .stale{opacity:.45}
   .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
@@ -83,8 +85,8 @@
     <div class="sub" id="heroSub">connecting&hellip;</div>
   </div>
   <div class="map">
-    <div class="term"><b>Medford/Tufts</b><span class="cars" id="termCars"></span></div>
     <div class="maphead"><span>&darr; inbound</span><span>outbound &uarr;</span></div>
+    <div class="term" id="termBox"><b>Medford/Tufts</b><span class="cars" id="termCars"></span></div>
     <div class="grid" id="grid">
       <div class="rail l"></div><div class="rail r"></div>
     </div>
@@ -94,7 +96,7 @@
 </div>
 <script>
 const $ = s => document.querySelector(s);
-let data = null, lastOk = 0, version = null;
+let data = null, lastOk = 0, version = null, dueLatch = null;
 
 const pad = n => String(Math.floor(n)).padStart(2, "0");
 const mmss = s => (s < 0 ? "-" : "") + pad(Math.abs(s) / 60) + ":" + pad(Math.abs(s) % 60);
@@ -111,6 +113,7 @@ function paint() {
   const at = (data.at_station || [])[0];
   if (at) {
     hero.classList.add("here");
+    dueLatch = null;
     $("#heroLabel").textContent = "Train at the station";
     $("#heroBig").textContent = mmss(now - at.since);
     const late = at.late_s;
@@ -123,8 +126,13 @@ function paint() {
   } else if (data.next) {
     hero.classList.remove("here");
     const left = data.next.eta - now;
+    // The feed nudges an imminent ETA forward a couple of seconds each poll, so a
+    // bare `left > 0` test flickers between "due" and 0:02. Latch "due" once it is
+    // close, and only release when it is clearly not.
+    if (left <= 30) dueLatch = data.next.eta;
+    else if (dueLatch && left > 75) dueLatch = null;
     $("#heroLabel").textContent = "Next train expected in";
-    $("#heroBig").textContent = left > 0 ? mmss(left) : "due";
+    $("#heroBig").textContent = dueLatch ? "due" : mmss(left);
     const band = Math.round((data.next.hi - data.next.lo) / 2);
     $("#heroSub").innerHTML = `${hhmm(data.next.eta)} &plusmn;${band}s &middot; `
       + `${data.next.source}` + (data.next.backed ? "" :
@@ -147,6 +155,7 @@ function paint() {
   $("#foot").innerHTML =
     `<span class="dot${age > 30 ? " off" : ""}"></span>`
     + (age > 30 ? `stale ${Math.round(age)}s` : `live`)
+    + (u.non_revenue ? ` &middot; ${u.non_revenue} not in service` : "")
     + ` &middot; ${u.at_terminus ?? 0} at Medford/Tufts, `
     + `${(u.departed_med || []).length} past Medford, `
     + `${(u.departed_ball || []).length} past Ball Sq`
@@ -158,9 +167,12 @@ let rowTops = [];
 function drawMap() {
   const g = $("#grid");
   const stops = data.stops || [];
-  if (!g.dataset.built && stops.length) {
+  // The terminus is its own box above the rails, so it is row 0 of the coordinate
+  // space but is NOT repeated in the stop list below.
+  const below = stops.slice(1);
+  if (!g.dataset.built && below.length) {
     g.querySelectorAll(".stopname,.node,.train").forEach(e => e.remove());
-    stops.forEach(name => {
+    below.forEach(name => {
       const d = document.createElement("div");
       d.className = "stopname" + (name.startsWith("Magoun") ? " me" : "");
       d.textContent = name;
@@ -169,18 +181,21 @@ function drawMap() {
     });
     g.dataset.built = "1";
   }
-  // Measure once per paint: row centres drive both the nodes and the trains.
   const names = [...g.querySelectorAll(".stopname")];
   if (!names.length) return;
-  const base = g.getBoundingClientRect().top;
-  rowTops = names.map(n => n.getBoundingClientRect().top - base
-                            + n.getBoundingClientRect().height / 2);
+  const gr = g.getBoundingClientRect();
+  const tr = $("#termBox").getBoundingClientRect();
+  // Row 0 is the terminus box centre, expressed in grid coordinates (usually
+  // negative, i.e. above the rails). Rows 1..n are the stops below it.
+  rowTops = [tr.top + tr.height / 2 - gr.top].concat(
+    names.map(n => n.getBoundingClientRect().top - gr.top
+                    + n.getBoundingClientRect().height / 2));
 
   g.querySelectorAll(".node").forEach(e => e.remove());
-  rowTops.forEach((y, i) => {
+  rowTops.slice(1).forEach((y, i) => {
     for (const side of ["l", "r"]) {
       const n = document.createElement("div");
-      n.className = "node " + side + (stops[i].startsWith("Magoun") ? " me" : "");
+      n.className = "node " + side + (below[i].startsWith("Magoun") ? " me" : "");
       n.style.top = y + "px";
       g.appendChild(n);
     }
@@ -207,9 +222,11 @@ function drawMap() {
       g.appendChild(el);
     }
     el.className = "train " + (t.dir === 0 ? "l" : "r")
-      + (t.stopped ? "" : " moving") + (t.stale ? " stale" : "");
+      + (t.stopped ? "" : " moving") + (t.stale ? " stale" : "")
+      + (t.revenue === false ? " deadhead" : "");
     el.style.top = posY(t.pos) + "px";
-    el.title = id + (t.stopped ? " stopped" : " moving");
+    el.title = id + (t.stopped ? " stopped" : " moving")
+      + (t.revenue === false ? " — not in service, runs express" : "");
   }
 
   // Terminus box: inbound trains berthed at Medford/Tufts, ready to come back.
