@@ -96,6 +96,11 @@
   @media (prefers-reduced-motion:reduce){
     .train{transition:none} .train.moving{animation:none;opacity:.7}
   }
+  .alert{background:color-mix(in srgb,var(--bad) 9%,var(--card));
+         border:1px solid var(--bad);border-left-width:4px;border-radius:8px;
+         padding:11px 14px;margin-bottom:12px;font-size:13.5px;line-height:1.45}
+  .alert b{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+           color:var(--bad);margin-bottom:3px}
   .hist{background:var(--card);border:1px solid var(--line);border-radius:10px;
         margin-bottom:12px;overflow:hidden}
   .hist h2{font-size:11px;letter-spacing:.09em;text-transform:uppercase;
@@ -120,6 +125,7 @@
     <h1>Magoun Square &rarr; downtown</h1>
     <span class="clock" id="clock">--:--:--</span>
   </header>
+  <div id="alerts"></div>
   <div id="hero" class="hero">
     <div class="label" id="heroLabel">Next train</div>
     <div class="big" id="heroBig">--:--</div>
@@ -188,6 +194,12 @@ function paint() {
     $("#heroBig").textContent = "—";
     $("#heroSub").textContent = "nothing predicted";
   }
+  const al = (data.alerts || []).filter(a =>
+    ["SUSPENSION","STATION_CLOSURE","NO_SERVICE","SHUTTLE","DETOUR"].includes(a.effect));
+  $("#alerts").innerHTML = al.map(a =>
+    `<div class="alert"><b>${a.effect.replace("_"," ")}${
+      a.lifecycle === "UPCOMING" ? " · upcoming" : ""}</b>${
+      (a.header || a.short || "").slice(0, 190)}</div>`).join("");
   drawMap();
   $("#following").innerHTML = (data.following || []).map(r =>
     `<div class="row"><span class="k">${r.source}</span>`

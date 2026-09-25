@@ -219,6 +219,86 @@ def schedule_today(day: dt.date) -> list[float]:
     return sorted(t for t in (_iso(r["arr"] or r["dep"]) for r in rows) if t)
 
 
+_ALERT_CACHE: dict = {"t": 0.0, "data": []}
+
+
+def alerts(ttl: float = 120.0) -> list[dict]:
+    """Active and upcoming Green Line alerts, with the stops each one informs.
+
+    Without this the service will happily quote a 90%-confident arrival at a
+    station no train is serving. Observed live: a nine-day suspension of Green
+    Line service south of North Station, which silently invalidates every
+    downtown destination while Magoun itself looks perfectly normal.
+    """
+    now = time.time()
+    if now - _ALERT_CACHE["t"] < ttl:
+        return _ALERT_CACHE["data"]
+    try:
+        body = _get("alerts", {"filter[route]": "Green-B,Green-C,Green-D,Green-E"})
+    except Exception:  # noqa: BLE001 - never let an alert lookup break the ETAs
+        return _ALERT_CACHE["data"]
+    out = []
+    for a in body["data"]:
+        at = a["attributes"]
+        out.append({
+            "id": a["id"], "effect": at.get("effect"),
+            "severity": at.get("severity"), "lifecycle": at.get("lifecycle"),
+            "header": at.get("header"), "short": at.get("service_effect"),
+            "stops": sorted({e.get("stop") for e in at.get("informed_entity", [])
+                             if e.get("stop")}),
+            "periods": [(p.get("start"), p.get("end"))
+                        for p in at.get("active_period", [])],
+        })
+    _ALERT_CACHE.update(t=now, data=out)
+    return out
+
+
+# Every platform a Magoun rider passes through heading downtown. An alert that
+# touches none of these is someone else's problem -- showing it trains the eye to
+# ignore the banner, which is worse than showing nothing.
+CORRIDOR = {
+    "70512", "70510", "70508", "70506", "70514", "70502",   # GLX inbound
+    "70208", "70207", "70206", "70205",                      # Science Pk, North Sta
+    "70204", "70203", "70202", "70201",                      # Haymarket, Govt Ctr
+    "70200", "70199", "70198", "70197", "70196",             # Park St
+    "70159", "70158", "70155", "70154",                      # Boylston, Copley
+    "place-mgngl", "place-balsq", "place-mdftf", "place-gilmn",
+    "place-esomr", "place-lech", "place-north", "place-gover",
+    "place-pktrm", "place-haecl", "place-boyls", "place-coecl",
+}
+
+
+def relevant(al: list[dict] | None = None) -> list[dict]:
+    """Alerts touching the Magoun-to-downtown corridor, worst first."""
+    out = []
+    for a in (al if al is not None else alerts()):
+        stops = set(a["stops"])
+        # A route-wide alert carries no stops at all; keep it only if it is severe.
+        hits = bool(stops & CORRIDOR) or (not stops and (a["severity"] or 0) >= 7)
+        if hits:
+            out.append(a)
+    return sorted(out, key=lambda a: -(a["severity"] or 0))
+
+
+def blocking(stop: str, when: float | None = None,
+             al: list[dict] | None = None) -> list[dict]:
+    """Alerts that stop you reaching `stop` at time `when`."""
+    when = when or time.time()
+    out = []
+    for a in (al if al is not None else alerts()):
+        if a["effect"] not in ("SUSPENSION", "STATION_CLOSURE", "NO_SERVICE"):
+            continue
+        if stop not in a["stops"]:
+            continue
+        for start, end in a["periods"] or [(None, None)]:
+            s0 = _iso(start) if start else 0
+            s1 = _iso(end) if end else float("inf")
+            if s0 <= when <= s1:
+                out.append(a)
+                break
+    return out
+
+
 def snapshot() -> dict:
     preds = _get("predictions", {
         "filter[stop]": ",".join([MAGOUN_IN, BALL_IN, MED_IN, MED_OUT]),

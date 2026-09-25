@@ -238,6 +238,41 @@ skip figure as "skips that LAMP records", not as ground truth.
       reporting `STOPPED_AT` there is directly observable, independent of how the
       trip is labelled. This is the only way to get a real rate.
 
+## Alerts: the gap that mattered most
+
+Found by asking what other feeds exist, and immediately non-hypothetical. On
+2026-09-25 the alerts feed carried a **nine-day suspension** of Green Line service
+south of North Station (Sep 26 03:00 – Oct 5 03:00), informing Park Street,
+Government Center, North Station, Haymarket, Boylston and Copley. Magoun and
+Medford/Tufts are *not* informed, so trains keep running and every local signal
+looks healthy — while the journey model would have gone on quoting
+"Park St by 8:47, 90% confident" for nine days with no train going there.
+
+Now integrated: `service.alerts()` / `relevant()` / `blocking()`. A destination
+under a suspension gets `p_ontime = 0`, and the board carries a banner.
+
+Alerts are filtered to the **Magoun-to-downtown corridor**. The unfiltered feed
+surfaced a Dean Road closure on the C branch and a Brigham Circle suspension on
+the far end of the E — neither reachable from Magoun. A banner that fires on
+irrelevant alerts trains the eye to ignore it.
+
+## Other feeds worth taking, in value order
+
+- [ ] **Stop-level `SKIPPED` markers.** `record_rt.py` already archives
+      `stop_time_update.schedule_relationship`, and it is *already populated*: 8
+      distinct trips marked as skipping Magoun in the first day and a half, and the
+      counts are identical across all inbound GLX platforms, i.e. whole trips
+      declared as not serving the extension. **This is the no-show signal,
+      announced rather than inferred**, and it is sitting unused in the archive.
+      It may also be what the rider observed as "going express".
+- [ ] **Trip-level `CANCELED`.** Seen live on the Green Line. Same purpose,
+      stronger statement.
+- [ ] **Occupancy.** `occupancy_status` per vehicle and per carriage — "the front
+      car is jammed" is real information for a rider about to run for a train.
+- [ ] **Bus fallback.** When the corridor is suspended, the useful answer is not a
+      lower probability but a different mode. Magoun is served by bus routes; the
+      same v3 API predicts them.
+
 ## Phase 3 — Journey model  (new; falls out of the ride-time finding)
 
 Predicting arrival at Magoun is the smaller half of the problem.

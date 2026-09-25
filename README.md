@@ -16,7 +16,12 @@ uv run --with polars python src/server.py 8723   # then open:
 uv run python src/service.py 6                   # one-shot CLI, 6-minute walk
 ```
 
-**The board** carries a live GLX line map, drawn the way the T draws it — a thick
+**The board** leads with any service alert touching the Magoun-to-downtown
+corridor — suspensions and closures elsewhere on the Green Line are filtered out so
+the banner stays worth reading. A destination under a suspension is scored at 0%,
+not at a slightly lower confidence.
+
+It carries a live GLX line map, drawn the way the T draws it — a thick
 route-coloured line, white-centred station markers, the terminus capped — with Medford/Tufts at the top holding the
 trains waiting to turn around, inbound running *down* the left rail toward Magoun
 and outbound *up* the right rail toward the terminus. Trains are drawn as little cars — windscreen and

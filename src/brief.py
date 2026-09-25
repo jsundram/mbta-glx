@@ -49,11 +49,16 @@ def _ride(model: service.Model, stop: str, n: int, rng) -> np.ndarray:
 
 def options(dest: str, deadline: float, walk: int, model: service.Model,
             snap: dict, berths: dict, limit: int = 4) -> list[dict]:
-    """Rank the upcoming trains by P(at `dest` by `deadline`)."""
+    """Rank the upcoming trains by P(at `dest` by `deadline`).
+
+    A destination under a suspension gets p_ontime = 0: no amount of prediction
+    quality gets you to a station no train is serving.
+    """
     rng = np.random.default_rng(11)
     rows = service.etas(snap, model, walk, berths=berths)
     rows = [r for r in rows if r["lo"] > snap["t"]][:8]
     ride = _ride(model, dest, N, rng)
+    blocked = service.blocking(dest, deadline)
     out = []
     for i, r in enumerate(rows):
         arr = _qsample(r["lo"], r["eta"], r["hi"], N, rng)
@@ -68,16 +73,19 @@ def options(dest: str, deadline: float, walk: int, model: service.Model,
         p_catch = float(np.mean(arr >= snap["t"] + walk))
         at_dest = arr + ride
         out.append({
+            "blocked": bool(blocked),
             "p_catch": p_catch,
             "eta": r["eta"], "lo": r["lo"], "source": r["source"],
             "backed": r["backed"], "vehicle": r.get("vehicle"),
             "leave_by": r["lo"] - walk,
-            "p_ontime": float(np.mean(at_dest <= deadline)),
+            "p_ontime": 0.0 if blocked else float(np.mean(at_dest <= deadline)),
             "dest_p50": float(np.median(at_dest)),
             "dest_p90": float(np.quantile(at_dest, 0.9)),
             "dest_p95": float(np.quantile(at_dest, 0.95)),
             "catchable": p_catch >= 0.90,
         })
+    for o in out:
+        o["blocked_by"] = blocked[0]["short"] if blocked else None
     return out[:limit]
 
 
