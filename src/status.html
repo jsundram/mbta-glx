@@ -32,7 +32,9 @@
        border-top:1px solid var(--line);font-size:14px}
   .row:first-child{border-top:0}
   .list{background:var(--card);border:1px solid var(--line);border-radius:10px;
-        padding:4px 16px;margin-bottom:12px}
+        padding:0 16px 6px;margin-bottom:12px}
+  .listhead{font-size:11px;letter-spacing:.09em;text-transform:uppercase;
+            color:var(--dim);margin:0;padding:13px 0 4px;font-weight:600}
   .k{color:var(--dim)} .v{font-family:var(--mono);font-variant-numeric:tabular-nums}
   /* line map, drawn the way the T draws it: a thick line in the route colour,
      white-centred station dots, terminus capped. */
@@ -107,6 +109,7 @@
     <div class="big" id="heroBig">--:--</div>
     <div class="sub" id="heroSub">connecting&hellip;</div>
   </div>
+  <div class="list"><h2 class="listhead">Upcoming</h2><div id="following"></div></div>
   <div class="map">
     <div class="maphead"><span>&darr; inbound</span><span>outbound &uarr;</span></div>
     <div class="term" id="termBox"><b>Medford/Tufts</b><span class="cars" id="termCars"></span></div>
@@ -114,7 +117,6 @@
       <div class="rail l"></div><div class="rail r"></div>
     </div>
   </div>
-  <div class="list" id="following"></div>
   <div class="hist">
     <h2><span>Last 10 trains</span><em id="histScore">&nbsp;</em></h2>
     <div class="scroll" id="histRows"></div>
