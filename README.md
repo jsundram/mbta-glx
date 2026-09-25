@@ -24,6 +24,10 @@ a nose pointing the way they travel, so they never read as another station dot;
 moving ones pulse, stale positions grey out, non-revenue trains are dashed. Because today's
 inbound train is yesterday's outbound train, the right rail is a preview of the left.
 
+Below the map it scores itself: the **last 10 trains**, each showing when "leave
+now" would have fired and whether you would have caught it
+(`uv run python src/replay.py 390` for the same thing in the terminal).
+
 It also answers one question at a glance: *next train expected in MM:SS*, or
 *train at the station* with how long it has been there and how late it is against
 the timetable. It ticks locally every 250 ms and re-polls every 5 s, so the

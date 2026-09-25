@@ -329,6 +329,30 @@ Start with (2), since committing to a train is already the interaction.
 
 ---
 
+## Self-scoring: the last 10 trains
+
+`src/replay.py` replays the recorded prediction stream against observed arrivals and
+asks the only question that matters: **when would "leave now" have fired, and would
+you have made it?** Shown on the board, refreshed every minute.
+
+Both sources the service quotes are replayed — MBTA's own prediction where one
+exists, and the timetable before that — because scoring MBTA predictions alone
+understates the app, the schedule being what carries the horizon past ~13 minutes.
+
+First run, 12 evening arrivals at a 6.5-min walk: **caught 9/12, mean wait 3.2 min**.
+The three failures were all the *same* failure — the first usable prediction arrived
+less than a walk-time before the train, so no advice was possible. That is precisely
+the gap this project exists to close, and it is now measured continuously rather
+than argued about.
+
+Two replay traps, both hit while building it:
+- A vehicle passes Magoun many times a day, so its prediction stream must be
+  windowed to the current visit; otherwise predictions from hours earlier look like
+  hours of warning.
+- Windowing by the previous arrival is not enough — a *missed* intervening arrival
+  lets predictions aimed at the previous visit through. The prediction must also be
+  about this arrival (within 15 min of it).
+
 ## Status board
 
 `http://localhost:8723/board` — one screen, no interaction: next train in MM:SS, or

@@ -11,6 +11,7 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
+import replay
 import service
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -100,6 +101,15 @@ class Handler(BaseHTTPRequestHandler):
                     "headway_median_s": _model.headway,
                 }).encode()
                 self._send(200, "application/json", body)
+            except Exception as e:  # noqa: BLE001
+                self._send(503, "application/json",
+                           json.dumps({"error": str(e)}).encode())
+        elif u.path == "/history":
+            try:
+                walk = int(parse_qs(u.query).get("walk", ["6"])[0]) * 60
+                rows = replay.score(walk=walk, n=10)
+                self._send(200, "application/json",
+                           json.dumps({"rows": rows, "walk": walk}).encode())
             except Exception as e:  # noqa: BLE001
                 self._send(503, "application/json",
                            json.dumps({"error": str(e)}).encode())
