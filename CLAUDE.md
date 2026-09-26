@@ -141,9 +141,10 @@ without anyone noticing.
   *event* and the scheduled send still arrives. Both are instructions to the ntfy
   **app** to collapse or dismiss a notification in the tray, not server-side
   scheduling — which is why from a phone it looks exactly like "reschedule delivers
-  exactly once", and was written down that way. So every re-arm is a real delivery:
-  `web/board.html` re-arms only when the leave time moved, and refinement after the
-  page closes belongs to `watch.py`, which is what the `arm` handoff is for.
+  exactly once", and was written down that way. So a scheduled alert cannot be
+  refined from a page at all: `web/board.html` and `src/status.html` arm **once**,
+  as the fallback for a notifier that is not running, and refinement belongs to
+  `watch.py` — which is what the `arm` handoff on the command topic is for.
 - MBTA predictions **flap ~8 min for ~90 s**. Debounce longer than the flap, and
   never widen a re-match far enough to reach the next train (headway 528 s).
 - `cdn.mbta.com/*.pb` has **no CORS** and is the only source of `SKIPPED`

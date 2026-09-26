@@ -39,8 +39,10 @@ Three things can only run server-side, and nothing else needs to:
 2. **The archive.** A browser cannot accumulate history.
 3. **Proactive triggers** with no page open (morning brief, post-close refinement).
 
-An always-on tablet running the board covers (3) for the common case — it re-arms
-the pending alert every minute. It cannot cover (1) or (2).
+An always-on tablet does **not** cover (3), which was the M2 assumption: a
+scheduled ntfy message cannot be re-pointed, so the page can only add deliveries,
+never refine one. The board arms once as a fallback and hands the train to
+`watch.py` (M5). A tablet cannot cover (1) or (2) either.
 
 ---
 
@@ -357,8 +359,11 @@ still arrives. Both are the ntfy *app* collapsing or dismissing a notification, 
 the server rescheduling — indistinguishable from "delivers exactly once" when you
 are watching a phone. So a re-arm is a real max-priority delivery, and a board left
 open past its leave time queued one a minute until the train arrived. The board now
-re-arms only when the leave time actually moved, never once it has passed, and
-hands the refining to the notifier instead.
+arms **once** — the fallback for a notifier that is not running — and hands the
+refining to the notifier, which is the only place it can actually be done. The
+handoff names the train that was *armed*, read back from storage: handing over
+`data.next` walks the commitment onto the following train the moment this one
+arrives, which resets the fact that leave-now fired.
 
 `tests/test_watch.py` drives real ticks through the real plan file with three seams
 stubbed — where a snapshot comes from, what `etas` makes of it, where a push goes.
