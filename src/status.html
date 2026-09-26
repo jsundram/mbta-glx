@@ -116,6 +116,12 @@
   .hrow .t{font-family:var(--mono);color:var(--dim)}
   .hrow .o{font-weight:600}
   .o.good{color:var(--go)} .o.meh{color:var(--warn)} .o.bad{color:var(--bad)}
+  .bell{background:none;border:1px solid var(--line);border-radius:999px;
+        color:var(--dim);font:inherit;font-size:11px;padding:3px 9px;cursor:pointer;
+        margin-left:8px;white-space:nowrap}
+  .bell:hover{border-color:var(--go);color:var(--go)}
+  .bell.armed{border-color:var(--go);color:var(--card);background:var(--go)}
+  .bell:focus-visible{outline:2px solid var(--go);outline-offset:2px}
   .foot{color:var(--dim);font-size:12px;margin-top:14px;line-height:1.6}
   .stale{opacity:.45}
   .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
@@ -150,6 +156,49 @@
 <script>
 const $ = s => document.querySelector(s);
 let data = null, lastOk = 0, version = null, dueLatch = null;
+
+// ---- push, with no backend involved ----
+// ntfy accepts cross-origin POSTs and will hold a message until a future time
+// (`At`). Publishing again with the same Sequence-ID replaces the pending one, so
+// this page can keep an alert current while it is open, and the alert still fires
+// after the page is closed. Verified: reschedule delivers exactly once.
+const NTFY = localStorage.getItem("magoun.ntfy") || "";
+const SEQ = "magoun-leave";
+let armed = false;
+
+async function armAlert(next) {
+  if (!NTFY) {
+    const t = prompt("ntfy topic to notify (from ops/ntfy.env):", "");
+    if (!t) return;
+    localStorage.setItem("magoun.ntfy", t.trim());
+    return location.reload();
+  }
+  const walk = +(localStorage.getItem("magoun.walk") || 390);
+  const leaveAt = Math.max(Math.round(next.lo - walk), Math.round(Date.now()/1000) + 11);
+  try {
+    await fetch(`https://ntfy.sh/${NTFY}`, {
+      method: "POST",
+      headers: {
+        "At": String(leaveAt),
+        "Sequence-ID": SEQ,
+        "Priority": "5",
+        "Title": "Leave now",
+        "Tags": "runner",
+      },
+      body: `${hhmm(next.eta)} train from Magoun · ${Math.round((next.hi-next.lo)/2)}s band`,
+    });
+    armed = true;
+    paint();
+  } catch (e) { alert("could not set the alert: " + e.message); }
+}
+
+async function cancelAlert() {
+  try {
+    await fetch(`https://ntfy.sh/${NTFY}/${SEQ}/delete`);
+  } catch (e) { /* the alert simply stays scheduled */ }
+  armed = false;
+  paint();
+}
 
 const pad = n => String(Math.floor(n)).padStart(2, "0");
 const mmss = s => (s < 0 ? "-" : "") + pad(Math.abs(s) / 60) + ":" + pad(Math.abs(s) % 60);
@@ -189,7 +238,10 @@ function paint() {
     const band = Math.round((data.next.hi - data.next.lo) / 2);
     $("#heroSub").innerHTML = `${hhmm(data.next.eta)} &plusmn;${band}s &middot; `
       + `${data.next.source}` + (data.next.backed ? "" :
-        ` &middot; <span class="vlate">unconfirmed</span>`);
+        ` &middot; <span class="vlate">unconfirmed</span>`)
+      + `<button class="bell${armed ? " armed" : ""}" id="bell">`
+      + (armed ? "leave alert set" : "notify me") + `</button>`;
+    $("#bell").onclick = () => armed ? cancelAlert() : armAlert(data.next);
   } else {
     hero.classList.remove("here");
     $("#heroLabel").textContent = "Next train";
@@ -202,6 +254,11 @@ function paint() {
     `<div class="alert"><b>${a.effect.replace("_"," ")}${
       a.lifecycle === "UPCOMING" ? " · upcoming" : ""}</b>${
       (a.header || a.short || "").slice(0, 190)}</div>`).join("");
+  // While the page is open, keep any armed alert pointed at the current ETA.
+  if (armed && data.next && Date.now()/1000 - (window._lastArm || 0) > 60) {
+    window._lastArm = Date.now()/1000;
+    armAlert(data.next);
+  }
   drawMap();
   $("#following").innerHTML = (data.following || []).map(r =>
     r.skipped

@@ -38,6 +38,11 @@ internal id. Moving cars pulse, stale positions fade, non-revenue trains are
 hatched, and trains waiting to turn around sit in the terminus pill. Because today's
 inbound train is yesterday's outbound train, the right rail is a preview of the left.
 
+The **notify me** button on the next train arms a push with no backend involved:
+ntfy holds the message until the computed leave time, the page re-arms it once a
+minute while open so a moving ETA stays current, and it still fires after you
+close the tab. First use asks for the topic and remembers it.
+
 Below the map it scores itself: the **last 10 trains**, each showing when "leave
 now" would have fired and whether you would have caught it
 (`uv run python src/replay.py 390` for the same thing in the terminal).
