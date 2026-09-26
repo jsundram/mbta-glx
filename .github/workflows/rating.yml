@@ -14,6 +14,11 @@
 # GITHUB_TOKEN is the built-in token. No secret to add.
 name: rating
 
+# GitHub disables a scheduled workflow after 60 days with no commits to the repo,
+# and emails the owner rather than failing loudly. This is the guard for the
+# 2026-12-12 rating change, which resets every schedule-dependent constant, so a
+# quiet autumn is exactly the condition under which it would switch itself off.
+# Check it is still `active` if the repo has been idle: `gh workflow list --all`.
 on:
   schedule:
     - cron: "23 12 * * 2"       # Tuesdays, after MBTA's usual republish window

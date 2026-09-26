@@ -11,7 +11,13 @@
 # with nothing on screen to say so.
 #
 # Requires, once, in the repository settings: Pages -> Build and deployment ->
-# Source -> GitHub Actions. No secrets.
+# Source -> GitHub Actions. No secrets. (Settable without the UI:
+# `gh api -X POST repos/OWNER/REPO/pages -f build_type=workflow`.)
+#
+# The FIRST deploy needs a nudge. A branch-creation push -- what `gh repo create
+# --push` does -- does not match the `paths` filter below, so this never runs and
+# GitHub never registers the workflow, which makes `gh workflow run` answer 404.
+# Touching this file is enough, since it is in its own paths list.
 name: pages
 
 on:
