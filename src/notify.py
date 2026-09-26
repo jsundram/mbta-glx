@@ -8,7 +8,8 @@ That keeps the notifier host-portable (see launch-plan.md, Phase 5).
 Verified against ntfy.sh: live delivery carries title, priority 5 and `http` action
 buttons intact. Note that anonymous topics do NOT replay from cache -- `poll=1` and
 `since=all` come back empty -- so a tap made while this process is down is simply
-lost. Subscriptions therefore use `since=now` and the rider just taps again.
+lost. Subscriptions therefore pass no `since` at all -- ntfy rejects `since=now`
+with HTTP 400 -- and the rider just taps again. See listen() below.
 
 Topics are unguessable secrets -- there is no account -- so keep them out of git.
 

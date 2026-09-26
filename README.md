@@ -69,16 +69,22 @@ close the tab. First use asks for the topic and remembers it, and offers to
 remember the command topic too — with that, the button also hands the train to the
 notifier, which is what keeps the alert current once the page is gone.
 
-That handoff matters because a scheduled ntfy message cannot be rescheduled. The
-page re-points its own alert only when the leave time has actually moved, and never
-once it has passed, because every publish is a real delivery: `Sequence-ID` and
-`delete` collapse and dismiss notifications in the app, they do not reschedule
-anything on the server.
+That handoff matters because a scheduled ntfy message cannot be rescheduled at
+all. `Sequence-ID` and `delete` collapse and dismiss notifications *in the app*;
+they do not touch the server's queue, so every publish is a real delivery. The
+page therefore arms exactly **once**, as the fallback for a notifier that is not
+running, and refining it is the notifier's job — the only place it can be done.
 
 Left open on a tablet it holds the screen awake via `navigator.wakeLock` where
 supported, survives a browser-initiated reload, and refreshes immediately when the
 screen wakes. If the tablet dies the alert still fires — ntfy holds it — and if the
 notifier is running it is still being refined.
+
+If the backend is reachable the footer also watches the **archiver**, and says so
+when it has stopped writing — an un-captured day cannot be recovered, because the
+schedules API only serves about eight days back. Unreachable is rendered as
+nothing at all: a phone off the tailnet is the normal case, and a warning that
+cries wolf is one you stop reading.
 
 Below the map it scores itself: the **last 10 trains**, each showing when "leave
 now" would have fired and whether you would have caught it
@@ -86,9 +92,9 @@ now" would have fired and whether you would have caught it
 
 It also answers one question at a glance: *next train expected in MM:SS*, or
 *train at the station* with how long it has been there and how late it is against
-the timetable. It ticks locally every 250 ms and re-polls every 5 s, so the
-countdown stays smooth even between polls, and it reloads itself when the server
-restarts with new code — you never need to refresh by hand.
+the timetable. It ticks locally every 250 ms and re-polls every 10 s, so the
+countdown stays smooth even between polls, and it reloads itself when the model
+or the server changes under it — you never need to refresh by hand.
 
 Set `MBTA_API_KEY` (free, from api-v3.mbta.com) to lift the keyless rate limit.
 
@@ -272,6 +278,8 @@ the 90-day prune of the archive it was computed from.
 | `src/snapshot_schedule.py` | capture each day's schedule before the API drops it |
 | `src/daily.sh`, `ops/` | launchd agents for the archiver and daily maintenance |
 | `src/record_live.py` | older v3-API recorder, superseded by `record_rt.py` |
+| `src/fetch_schedules.py` | one-shot schedule pull, superseded by `snapshot_schedule.py` |
+| `src/backtest_berth.py` | where the berth tier's numbers came from; run by hand |
 | `src/validate_live.py` | calibrate prediction error vs. lead time |
 | `src/service.py`, `src/server.py`, `src/ui.html` | the live service |
 | `web/board.html`, `web/app.js` | the same board with no backend; `app.js` ports `compute_rows` |

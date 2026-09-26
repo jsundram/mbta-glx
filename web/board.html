@@ -332,6 +332,11 @@ function disarm() {
 const pad = n => String(Math.floor(n)).padStart(2, "0");
 const mmss = s => (s < 0 ? "-" : "") + pad(Math.abs(s) / 60) + ":" + pad(Math.abs(s) % 60);
 const hhmm = t => new Date(t * 1000).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
+/** A duration that stays readable past an hour. mmss would render six hours as
+ *  "360:00" in a slot the eye reads as minutes and seconds -- and six hours dead
+ *  is exactly the case this has to survive. */
+const dur = s => s >= 3600 ? `${Math.floor(s / 3600)}h ${pad((s % 3600) / 60)}m`
+                           : mmss(s);
 
 function paint() {
   $("#clock").textContent = new Date().toLocaleTimeString([], {hour12: false});
@@ -420,7 +425,9 @@ function paint() {
     // archiver has been dead for six hours. `null` is "backend unreachable",
     // which is the normal state off the tailnet and says nothing either way.
     + (data.capture && data.capture.stale
-        ? ` &middot; <span class="cap">archiver silent ${mmss(data.capture.age)}`
+        ? ` &middot; <span class="cap">archiver `
+          + (data.capture.never ? "has written nothing today"
+                                : `silent ${dur(data.capture.age)}`)
           + ` &mdash; losing data</span>`
         : "")
     + (armed ? ` &middot; <span style="color:var(--go)">alert armed, refreshing</span>` : "");

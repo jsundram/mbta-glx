@@ -1,5 +1,6 @@
 """Fit the arrival model from history and export it as JSON for the live service."""
 import json
+import urllib.parse
 import pathlib
 
 import numpy as np
@@ -27,6 +28,23 @@ def _as_script(text: str) -> str:
     """The same bytes, reachable from file:// where fetch() is not."""
     return ("globalThis.Magoun = globalThis.Magoun || {};\n"
             "Magoun._modelText = " + json.dumps(text) + ";\n")
+
+def _backend_url() -> str:
+    """The backend's base, validated. A base, so it must carry no path.
+
+    The obvious migration slip is pasting the old `extras_url` value -- which
+    ended in /skips -- under the new key. Nothing else would catch it: the config
+    and the published copy would agree with each other, and the host allowlist
+    matches on host only. The board would then fetch /skips/skips and
+    /skips/capture and lose both features in silence.
+    """
+    url = service.CONFIG.get("backend_url", "").rstrip("/")
+    if url and urllib.parse.urlparse(url).path:
+        raise SystemExit(
+            f"data/config.json: backend_url must be a bare origin, got {url!r}. "
+            "The board appends /skips and /capture itself.")
+    return url
+
 
 def main() -> None:
     df = pl.read_parquet("data/magoun.parquet").filter(pl.col("magoun_arr").is_not_null())
@@ -99,7 +117,7 @@ def main() -> None:
         # there are two of them now and they move together. Empty or absent means
         # no backend: the board loses the strikethrough and the capture age, and
         # is otherwise exactly the board it was before either existed.
-        "backend_url": service.CONFIG.get("backend_url", "").rstrip("/"),
+        "backend_url": _backend_url(),
         "band_s": {"mbta": 75, "departed Ball Sq": 7,
                    "departed Medford/Tufts": 33},
         "stops": {"magoun_in": "70508", "ball_in": "70510",

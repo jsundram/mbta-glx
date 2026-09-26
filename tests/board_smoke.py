@@ -207,7 +207,7 @@ def capture_scenario(browser, check) -> None:
     host = re.escape(json.loads((ROOT / "web" / "model.json").read_text())
                      ["constants"]["backend_url"].split("/")[2])
 
-    def run(capture_body, label):
+    def run(capture_body, label, two_polls=False):
         page = browser.new_page()
         page.add_init_script(f"""localStorage.setItem("magoun.walk", "{WALK_S}");
                                  localStorage.removeItem("magoun.berths");""")
@@ -221,23 +221,52 @@ def capture_scenario(browser, check) -> None:
                                             "ttl_s": 60}))))
         page.goto(BOARD)
         page.wait_for_timeout(6000)
+        first = page.inner_text("#foot")
+        # The warning needs two consecutive bad reads, so a second poll is
+        # required before it can appear at all -- see below.
+        if two_polls:
+            page.wait_for_timeout(11000)
         foot = page.inner_text("#foot")
         page.close()
-        print(f"  {label}: {foot[:120]}")
-        return foot
+        print(f"  {label}: {foot[:130]}")
+        return first, foot
 
     print("\n  the archiver's heartbeat, as the footer reports it")
-    fresh = run({"as_of": time.time() - 20, "stale_after_s": 600}, "writing")
+    _, fresh = run({"as_of": time.time() - 20, "stale_after_s": 600}, "writing")
     check("a live archiver says nothing", "archiver" not in fresh.lower(), fresh[:80])
 
-    dead = run({"as_of": time.time() - 4000, "stale_after_s": 600}, "silent 66m")
-    check("a silent archiver is called out", "archiver silent" in dead.lower(), dead[:90])
+    one, dead = run({"as_of": time.time() - 4000, "stale_after_s": 600},
+                    "silent 66m", two_polls=True)
+    # server.py answers the moment the Mac is up while record_rt may not have
+    # appended yet, so one bad read on wake would paint "silent 8:00:00" and
+    # teach the rider to ignore the line.
+    check("one bad read does not raise the alarm",
+          "archiver" not in one.lower(), one[-80:])
+    check("a silent archiver is called out on the second", "archiver silent" in dead.lower(),
+          dead[-90:])
     check("and it says data is being lost", "losing data" in dead.lower())
 
-    gone = run(None, "backend unreachable")
+    _, gone = run(None, "backend unreachable")
     check("an unreachable backend is NOT reported as a dead archiver",
           "archiver" not in gone.lower(),
           "off the tailnet must not look like data loss: " + gone[:80])
+
+    # as_of 0 is the backend saying "no archive file exists at all". Reachable
+    # exactly when this matters: the archiver dies at 23:00, daily.sh compacts and
+    # unlinks yesterday's file at 03:00, and nothing is writing a new one. `now-0`
+    # is the whole Unix epoch, which rendered as a six-figure counter.
+    _, never = run({"as_of": 0, "stale_after_s": 600}, "nothing ever written",
+                   two_polls=True)
+    check("an empty archive is reported without a nonsense age",
+          "losing data" in never.lower() and "written nothing" in never.lower(),
+          never[-90:])
+    check("and no six-figure counter leaks into the footer",
+          not re.search(r"\d{4,}:\d\d", never), never[-90:])
+
+    # Six hours dead is the case the line has to survive; mmss would say 360:00.
+    _, long = run({"as_of": time.time() - 21600, "stale_after_s": 600},
+                  "silent 6h", two_polls=True)
+    check("a long silence reads in hours", "6h" in long, long[-90:])
 
 
 def upgrade_scenario(browser, check) -> None:

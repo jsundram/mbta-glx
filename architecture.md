@@ -18,7 +18,8 @@ shape of the system and the order of work.
 │    ├─ fetch  model.json               fitted quantiles     │
 │    ├─ <script> model.js               same bytes, file://  │
 │    ├─ fetch  stats.json               how it has been doing│
-│    ├─ fetch  <extras_url>/skips       skips (no CORS path) │
+│    ├─ fetch  <backend_url>/skips      skips (no CORS path) │
+│    ├─ fetch  <backend_url>/capture    is the archiver alive? │
 │    └─ POST   ntfy.sh                  arm its own alerts   │
 └────────────────────────────────────────────────────────────┘
         ▲ published artifacts              ▲ scheduled push
@@ -363,9 +364,10 @@ Two halves, and only one of them can be finished on demand.
 
 **The transport, done.** `GET /skips` on `server.py` returns
 `{as_of, trips, ttl_s}` and nothing else, parsed from the protobuf feed rather
-than relayed. `data/config.json` holds `extras_url`, `fit.py` publishes it into
-`model.json`'s constants beside `walk_s`, and `app.js` reads it from there — so
-moving the endpoint is a republish, not a code change. Adding the constant was a
+than relayed. `data/config.json` holds `backend_url` — a bare origin, which
+`fit.py` rejects a path on — published into `model.json`'s constants beside
+`walk_s`, and `app.js` appends `/skips` and `/capture` to it. So moving the host
+is a republish, not a code change. Adding the constant was a
 one-field refit: 1 of 52 fields changed, the fit untouched.
 
 It stays bound to `127.0.0.1`. §5 called for "a bind beyond 127.0.0.1" on the

@@ -673,7 +673,7 @@ split the rider asked for is real:
 ```
   static site  ──fetch──>  api-v3.mbta.com        (live, CORS, no key needed)
    (Pages/CDN) ──fetch──>  model.json, stats.json (published by the backend)
-                ──fetch──>  <extras_url>/skips    (the one thing browsers cannot get)
+                ──fetch──>  <backend_url>/skips, /capture   (what browsers cannot get)
 
   backend (small, always-on)
      record_rt.py    continuous capture  ──>  data/live, data/pairs
@@ -732,7 +732,7 @@ but it is the fallback if the JS port starts growing.
       through both implementations, every field of every row compared; drift
       injection table in architecture.md §4.
 - [x] The skip set a browser cannot fetch. Not a publisher in the end: `GET
-      /skips` on `server.py`, served over Tailscale, with `extras_url` published
+      /skips` on `server.py`, served over Tailscale, with `backend_url` published
       into `model.json`'s constants so moving it is a republish.
 - [x] **`stats.json`, and the publisher that moves it.** `src/stats.py` scores each
       closed day once and appends it to `data/scores.jsonl`, so the window outlives

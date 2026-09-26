@@ -459,7 +459,7 @@ async function skippedTrips(now, model) {
  *  being lost right now), and unknown (the backend is unreachable, which is the
  *  normal state of a phone off the tailnet and says nothing about the archiver).
  *  Same timeout and backoff as the skip set, for the same reason. */
-const capture = {asOf: 0, staleAfter: 600, seen: false, nextTry: 0};
+const capture = {asOf: 0, staleAfter: 600, seen: false, nextTry: 0, badReads: 0};
 
 async function captureAge(now, model) {
   const base = (model.m.constants || {}).backend_url;
@@ -476,8 +476,23 @@ async function captureAge(now, model) {
       capture.nextTry = now + SKIP_BACKOFF_S;
     }
   }
-  if (!capture.seen) return null;                 // unknown, not healthy
-  return {age: now - capture.asOf, stale: (now - capture.asOf) > capture.staleAfter};
+  if (!capture.seen) { capture.badReads = 0; return null; }   // unknown, not dead
+
+  // as_of 0 means the backend found no archive file at all -- which is a real
+  // alarm, but `now - 0` is the whole Unix epoch and would print as a six-figure
+  // counter. Reachable exactly when this feature matters: the archiver dies at
+  // 23:00, daily.sh compacts and unlinks yesterday's file at 03:00, and there is
+  // no today file because nothing is writing one.
+  const never = capture.asOf <= 0;
+  const age = never ? null : now - capture.asOf;
+  const bad = never || age > capture.staleAfter;
+
+  // Two consecutive bad reads before crying wolf. server.py answers the moment
+  // the Mac is up, while record_rt may not have appended yet, so a wake from
+  // overnight sleep would otherwise paint one frame of "silent 8:00:00" -- and a
+  // line that is wrong once is a line the rider stops reading.
+  capture.badReads = bad ? capture.badReads + 1 : 0;
+  return {age: age, never: never, stale: bad && capture.badReads >= 2};
 }
 
 async function fetchAlerts() {
@@ -600,8 +615,11 @@ function start(onData, onError) {
       const here = arrivals.update(snap, model);
       const day = serviceDate(snap.t);
       const slots = await scheduleSlots(model, day);
-      const skipped = await skippedTrips(snap.t, model);
-      const cap = await captureAge(snap.t, model);
+      // Together, not in sequence: both are the same unreachable host off the
+      // tailnet, and awaiting them one after the other doubles the stall this
+      // whole timeout exists to bound.
+      const [skipped, cap] = await Promise.all([
+        skippedTrips(snap.t, model), captureAge(snap.t, model)]);
       if (snap.t - lastAlerts > 120) {
         lastAlerts = snap.t;
         alerts = await fetchAlerts().catch(() => alerts);
