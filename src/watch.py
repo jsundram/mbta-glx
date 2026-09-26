@@ -6,8 +6,10 @@ Notification budget (launch-plan.md, decision 1): 4 normal, 6 worst case.
   adjust           -- once the train is moving and its ETA is sharp (+/-33 s or better)
   recovery         -- only if the committed train stops being predicted
 
-Commands arrive from action buttons on the phone via the ntfy command topic:
-  pick N | left | bump | cancel | brief | status
+Commands arrive on the ntfy command topic -- from action buttons on the phone, and
+from the board's bell, which is how an alert armed on a page that then closes keeps
+being refined:
+  arm <eta> [vehicle] | pick N | left | bump | cancel | brief | status
 """
 import datetime as dt
 import json
@@ -115,12 +117,56 @@ class Watcher:
         self.send_brief(p)
         return p
 
+    def arm_train(self, eta: float, vehicle: str | None = None) -> dict:
+        """Take over an alert the board armed, and keep refining it.
+
+        The bell on the static board schedules its own leave-now with ntfy and,
+        while the page is open, re-points it every minute. That re-pointing is the
+        only reason to leave a tablet running -- and it stops the moment the page
+        closes, leaving a push aimed at wherever the train was last seen. This is
+        the handoff: the bell also names the train here, and the notifier carries
+        on refining it with no page open.
+
+        There is no destination and no deadline, because the bell does not know an
+        errand -- only which train. So this plan gets leave-now, revisions and
+        recovery, and no probability of arriving anywhere by any time.
+
+        Re-arming the same train refreshes it rather than replacing it. A page left
+        open sends this every minute, and a fresh plan each time would forget that
+        leave-now had already fired, forget an adopted train, and reset the miss
+        count -- so the tablet being open would break the notifier watching.
+        """
+        p = load()
+        com = (p or {}).get("committed") or {}
+        same = p.get("armed_by") == "board" and com and (
+            (vehicle and com.get("vehicle") == vehicle)
+            or abs(com.get("target_eta", 0) - eta) <= MATCH)
+        if same:
+            com["target_eta"] = eta
+            if vehicle:
+                com["vehicle"] = vehicle
+            com["misses"] = 0
+            p["deadline"] = eta + 1800
+            save(p)
+            return p
+        p = {"dest": None, "deadline": eta + 1800, "conf": None, "walk": WALK,
+             "committed": {"target_eta": eta, "original_eta": eta,
+                           "vehicle": vehicle, "at": time.time(), "misses": 0},
+             "left_at": None, "fired": {}, "created": time.time(),
+             "options": [], "armed_by": "board"}
+        save(p)
+        log(f"armed from the board: {fmt(eta)}"
+            + (f" ({vehicle})" if vehicle else " (no vehicle id)"))
+        return p
+
     def _snapshot(self):
         snap = service.snapshot()
         return snap, self.berths.update(snap)
 
     def send_brief(self, p: dict) -> None:
         snap, b = self._snapshot()
+        if not p.get("dest"):
+            return self._send_train_list(p, snap, b)
         opts = brief.options(p["dest"], p["deadline"], p["walk"], self.model, snap, b)
         name = self.model.m["rides"][p["dest"]]["name"]
         title, body = brief.render(opts, brief.health(self.model), name,
@@ -134,6 +180,29 @@ class Watcher:
                          "vehicle": o.get("vehicle")} for o in pickable]
         save(p)
 
+    def _send_train_list(self, p: dict, snap: dict, b: dict) -> None:
+        """The brief for a plan armed from the board: trains and leave times.
+
+        No destination means no P(on time) to rank by, so this shows what the board
+        itself shows -- the next inbound trains and when to leave for each -- with
+        the same pick buttons, so a bare arm can still be re-pointed by hand.
+        """
+        rows = service.etas(snap, self.model, p["walk"], berths=b)
+        opts = self._options(p, rows, snap)[:3]
+        if not opts:
+            notify.send("Nothing predicted", "No inbound trains upstream right now.",
+                        priority=2, tags=["tram"])
+            return
+        lines = [f"{fmt(o['eta'])} train · leave {fmt(o['leave_by'])}"
+                 + ("" if o["catchable"] else " · too late") for o in opts]
+        notify.send("Next inbound at Magoun", "\n".join(lines), priority=3,
+                    tags=["tram"],
+                    actions=[notify.reply_action(fmt(o["eta"]), f"pick {i}", clear=True)
+                             for i, o in enumerate(opts)])
+        p["options"] = [{"eta": o["eta"], "p": None, "vehicle": o.get("vehicle")}
+                        for o in opts]
+        save(p)
+
     def commit(self, p: dict, idx: int) -> None:
         opts = p.get("options") or []
         if not 0 <= idx < len(opts):
@@ -145,12 +214,20 @@ class Watcher:
         p["fired"] = {}
         p["left_at"] = None
         save(p)
-        log(f"committed to {fmt(opts[idx]['eta'])} (p={opts[idx]['p']:.0%})")
+        odds = f" (p={opts[idx]['p']:.0%})" if opts[idx].get("p") is not None else ""
+        log(f"committed to {fmt(opts[idx]['eta'])}{odds}")
         notify.send("Locked in", f"Watching the {fmt(opts[idx]['eta'])}. "
                     f"I'll tell you when to leave.", priority=2, tags=["white_check_mark"])
 
     def _detail(self, p: dict, snap: dict, berths: dict, row: dict) -> dict | None:
-        """Live catch / on-time / 95%-there numbers for the committed train."""
+        """Live catch / on-time / 95%-there numbers for the committed train.
+
+        None for a plan armed from the board: those numbers are about reaching a
+        destination by a deadline, and it has neither. Checked rather than left to
+        the except below, which is there to swallow a surprise, not a known case.
+        """
+        if not p.get("dest"):
+            return None
         try:
             opts = brief.options(p["dest"], p["deadline"], p["walk"],
                                  self.model, snap, berths)
@@ -290,11 +367,27 @@ class Watcher:
         self._announce(p, row, snap["t"], "Your train may be running late")
         save(p)
 
+    def _options(self, p: dict, rows: list, snap: dict) -> list[dict]:
+        """Ranked alternatives to the committed train.
+
+        A plan made by `plan` has a destination and a deadline, so the ranking is
+        brief.options and every option carries P(on time). A plan armed from the
+        board's bell has neither -- the bell knows one train, not an errand -- so
+        the alternatives are simply the next trains still reachable on foot, and
+        `p_ontime` is None rather than a number nothing computed.
+        """
+        if p.get("dest"):
+            return brief.options(p["dest"], p["deadline"], p["walk"],
+                                 self.model, snap, self.berths.seen)
+        return [{"eta": r["eta"], "leave_by": r["lo"] - p["walk"], "p_ontime": None,
+                 "vehicle": r.get("vehicle"),
+                 "catchable": r["lo"] - p["walk"] >= snap["t"]}
+                for r in rows if not r.get("skipped")]
+
     def _recover(self, p: dict, rows: list, snap: dict) -> None:
         if p["fired"].get("recover"):
             return
-        opts = brief.options(p["dest"], p["deadline"], p["walk"],
-                             self.model, snap, self.berths.seen)
+        opts = self._options(p, rows, snap)
         nxt = next((o for o in opts if o["catchable"]), None)
         if nxt:
             # It may be the same train running late -- the feed cannot distinguish
@@ -303,14 +396,16 @@ class Watcher:
             same_ish = 0 < gap < self.model.headway * 1.5
             head = ("Your train may be running late" if same_ish
                     else "That train is not stopping at Magoun")
+            odds = (f" · {nxt['p_ontime']:.0%} for {fmt(p['deadline'])}"
+                    if nxt.get("p_ontime") is not None else "")
             notify.send(
                 head,
-                f"Best now is {fmt(nxt['eta'])} · {nxt['p_ontime']:.0%} for "
-                f"{fmt(p['deadline'])} · leave {fmt(nxt['leave_by'])}",
+                f"Best now is {fmt(nxt['eta'])}{odds} · leave {fmt(nxt['leave_by'])}",
                 priority=5, tags=["warning"],
                 actions=[notify.reply_action("Track it", "pick 0"),
                          notify.reply_action("Show options", "brief")])
-            p["options"] = [{"eta": o["eta"], "p": o["p_ontime"]} for o in opts[:3]]
+            p["options"] = [{"eta": o["eta"], "p": o["p_ontime"],
+                             "vehicle": o.get("vehicle")} for o in opts[:3]]
         else:
             notify.send("That train vanished", "No good option left for your deadline.",
                         priority=5, tags=["warning"])
@@ -325,7 +420,20 @@ class Watcher:
         cmd, *rest = text.split()
         with self.lock:
             p = load()
-        if cmd == "pick" and rest and p:
+        if cmd == "arm" and rest:
+            # From the board's bell: `arm <eta epoch> [vehicle]`. An epoch, not a
+            # clock time, so there is no zone to get wrong on either side.
+            try:
+                eta = float(rest[0])
+            except ValueError:
+                log(f"  (arm: {rest[0]!r} is not an epoch)")
+                return
+            if eta < time.time():
+                log(f"  (arm: {fmt(eta)} is in the past)")
+                return
+            vid = rest[1] if len(rest) > 1 and rest[1] != "-" else None
+            self.arm_train(eta, vid)
+        elif cmd == "pick" and rest and p:
             self.commit(p, int(rest[0]))
         elif cmd == "left" and p:
             p["left_at"] = time.time()

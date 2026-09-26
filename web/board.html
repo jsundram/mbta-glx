@@ -164,11 +164,24 @@ let data = null, lastOk = 0, version = null, dueLatch = null;
 
 // ---- push, with no backend involved ----
 // ntfy accepts cross-origin POSTs and will hold a message until a future time
-// (`At`). Publishing again with the same Sequence-ID replaces the pending one, so
-// this page can keep an alert current while it is open, and the alert still fires
-// after the page is closed. Verified: reschedule delivers exactly once.
+// (`At`), so this page can schedule a leave-now that still fires after it closes.
+//
+// Sequence-ID does NOT replace the pending one. Measured against ntfy.sh: three
+// publishes with one Sequence-ID and one At deliver three messages. `delete`
+// publishes a message_delete EVENT, which tells the ntfy app to dismiss a
+// notification it has already shown -- the scheduled send still arrives. Both are
+// client-side tidying in the app, not server-side scheduling, which is why this
+// once looked like "reschedule delivers exactly once" from a phone.
+//
+// So every re-arm is another real push. Two consequences, both handled below:
+// re-arm only when the leave time has actually moved (ARM_MOVE), and hand the
+// alert to the notifier, which can refine one alert instead of queueing more.
 const NTFY = localStorage.getItem("magoun.ntfy") || "";
+// The command topic watch.py listens on. Optional: without it the bell behaves
+// exactly as before -- a scheduled push and no refinement once the page is gone.
+const NTFY_CMD = localStorage.getItem("magoun.cmd") || "";
 const SEQ = "magoun-leave";
+const ARM_MOVE = 60;      // seconds the leave time must move to justify a new push
 // Armed state is persisted: an always-on tablet dashboard will be reloaded by the
 // browser under memory pressure, and losing the arm silently would stop the
 // refinement that is the whole reason for leaving it open.
@@ -198,10 +211,32 @@ async function armAlert(next) {
     const t = prompt("ntfy topic to notify (from ops/ntfy.env):", "");
     if (!t) return;
     localStorage.setItem("magoun.ntfy", t.trim());
+    // Optional second topic. With it, the notifier keeps refining this alert once
+    // the page closes; without it the bell is a scheduled push and nothing more.
+    const c = prompt("ntfy COMMAND topic, so the notifier can take over "
+                     + "(MAGOUN_NTFY_CMD; leave blank to skip):", "");
+    if (c && c.trim()) localStorage.setItem("magoun.cmd", c.trim());
     return location.reload();
   }
   const walk = Magoun.walkSeconds();
-  const leaveAt = Math.max(Math.round(next.lo - walk), Math.round(Date.now()/1000) + 11);
+  const now = Math.round(Date.now()/1000);
+  const target = Math.round(next.lo - walk);
+  const leaveAt = Math.max(target, now + 11);
+
+  // Hand the train to the notifier on every pass, armed or not. `arm` is
+  // idempotent there, and it is the only thing that keeps refining after this
+  // page closes -- including once leave-now has gone out, which is exactly when
+  // the mid-walk adjust and the recovery matter.
+  handOff(next);
+
+  // The scheduled push below is the fallback for when nothing is running to
+  // receive that. Every publish is a real delivery, so only pay for one when it
+  // buys something. Two cases where it does not: the leave time has not moved,
+  // and the leave moment has already gone -- past it the push has fired, and
+  // re-arming off the `now + 11` clamp buzzes again every minute until the train
+  // arrives. Neither is refinement; both are just noise.
+  const last = +(localStorage.getItem("magoun.armedLeaveAt") || 0);
+  if (armed && last && (target <= now || Math.abs(leaveAt - last) < ARM_MOVE)) return;
   try {
     await fetch(`https://ntfy.sh/${NTFY}`, {
       method: "POST",
@@ -217,17 +252,41 @@ async function armAlert(next) {
     armed = true;
     localStorage.setItem("magoun.armed", "1");
     localStorage.setItem("magoun.armedEta", String(Math.round(next.eta)));
+    localStorage.setItem("magoun.armedLeaveAt", String(leaveAt));
     paint();
   } catch (e) { alert("could not set the alert: " + e.message); }
 }
 
+// `arm <eta> [vehicle]` on the command topic watch.py already subscribes to. No
+// endpoint, no CORS, nothing for the backend to serve -- the same reply path the
+// notification buttons use, in the other direction.
+function handOff(next) {
+  if (!NTFY_CMD) return;
+  fetch(`https://ntfy.sh/${NTFY_CMD}`, {
+    method: "POST",
+    headers: {"Priority": "min", "Title": "cmd"},
+    body: `arm ${Math.round(next.eta)} ${next.vehicle || "-"}`,
+  }).catch(() => { /* the scheduled push is the fallback for exactly this */ });
+}
+
 async function cancelAlert() {
+  // This dismisses the notification in the app; it does NOT unschedule the send,
+  // which ntfy.sh gives anonymous topics no way to do. Telling the notifier is
+  // the part that actually stops anything, so do that too.
   try {
     await fetch(`https://ntfy.sh/${NTFY}/${SEQ}/delete`);
   } catch (e) { /* the alert simply stays scheduled */ }
+  if (NTFY_CMD) {
+    try {
+      await fetch(`https://ntfy.sh/${NTFY_CMD}`, {
+        method: "POST", headers: {"Priority": "min", "Title": "cmd"},
+        body: "cancel"});
+    } catch (e) { /* the notifier keeps watching; tap Cancel on its next push */ }
+  }
   armed = false;
   localStorage.removeItem("magoun.armed");
   localStorage.removeItem("magoun.armedEta");
+  localStorage.removeItem("magoun.armedLeaveAt");
   paint();
 }
 
@@ -293,6 +352,7 @@ function paint() {
       armed = false;
       localStorage.removeItem("magoun.armed");
       localStorage.removeItem("magoun.armedEta");
+      localStorage.removeItem("magoun.armedLeaveAt");
     } else if (data.next && Date.now()/1000 - (window._lastArm || 0) > 60) {
       window._lastArm = Date.now()/1000;
       armAlert(data.next);

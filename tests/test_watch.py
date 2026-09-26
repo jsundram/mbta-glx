@@ -37,7 +37,7 @@ class Feed:
     """The clock, the rows and the push -- the only three things stubbed."""
 
     def __init__(self):
-        self.now = time.time()
+        self.now = float(int(time.time()))   # whole seconds: `arm` carries an int
         self.rows: list[dict] = []
         self.sent: list[dict] = []
 
@@ -243,3 +243,114 @@ def test_a_stated_skip_does_not_wait_out_the_debounce(w, feed):
     w.tick()
     assert feed.titles == ["That train vanished"]
     assert watch.load()["committed"] is None
+
+
+# --- M5: the board's bell hands its alert to the notifier ---
+#
+# The bell schedules an ntfy push and, while the page is open, re-points it every
+# minute. Measured against ntfy.sh, a re-point is a NEW delivery -- Sequence-ID does
+# not replace a pending message and `delete` does not unschedule one -- so the page
+# cannot refine anything after it closes, and queueing more pushes is not refinement.
+# The handoff is a command on the topic on_command already listens to.
+
+def test_the_bell_hands_its_train_to_the_notifier(w, feed):
+    eta = feed.now + 1200
+    w.on_command(f"arm {int(eta)} G-10065", {})
+    com = watch.load()["committed"]
+    assert com["target_eta"] == eta and com["vehicle"] == "G-10065"
+
+
+def test_an_armed_alert_tracks_a_slip_with_no_page_open(w, feed):
+    """M5's done-when, by the path the board actually arms through."""
+    eta = feed.now + 1200
+    w.on_command(f"arm {int(eta)} G-10065", {})
+    feed.rows = [row(eta, vehicle="G-10065")]
+    w.tick()
+    feed.now += 120
+    feed.rows = [row(eta + 300, vehicle="G-10065")]
+    w.tick()
+    assert feed.titles == ["Your train is running late"]
+    assert watch.load()["committed"]["target_eta"] == eta + 300
+
+
+def test_an_armed_alert_recovers_without_a_destination(w, feed):
+    """A bare arm has no deadline, so recovery quotes a train, not a probability.
+
+    brief.options needs a destination; reaching it with None raises inside the
+    tick, where main swallows it -- the recovery would simply never arrive.
+    """
+    eta = feed.now + 1200
+    w.on_command(f"arm {int(eta)} G-10065", {})
+    feed.rows = [row(eta + HEADWAY, vehicle="G-10199", skipped=True)]
+    for _ in range(watch.MISS_TICKS):
+        feed.now += watch.TICK
+        w.tick()
+    assert feed.titles == ["That train vanished"]
+
+    # ...and with something left to offer, it names it and offers to track it.
+    feed.sent.clear()
+    w.on_command(f"arm {int(eta)} G-10065", {})
+    feed.rows = [row(eta, vehicle="G-10065", skipped=True),
+                 row(eta + HEADWAY, vehicle="G-10199")]
+    w.tick()
+    assert len(feed.sent) == 1
+    msg = feed.sent[0]
+    assert "Best now is" in msg["message"] and "leave" in msg["message"]
+    assert "%" not in msg["message"], "no deadline means no P(on time) to quote"
+    assert "Track it" in [a["label"] for a in msg["actions"]]
+
+
+def test_a_bare_arm_still_fires_leave_now(w, feed):
+    """_detail needs a destination. Returning None must not cost the push."""
+    walk, band = 390, 75
+    eta = feed.now + walk + band
+    w.on_command(f"arm {int(eta)} G-10065", {})
+    feed.rows = [row(eta, vehicle="G-10065", band=band)]
+    w.tick()
+    assert feed.titles == ["Leave now"]
+    assert "catch" not in feed.sent[0]["message"], "no destination, no odds"
+
+
+def test_arm_refuses_what_is_not_a_future_epoch(w, feed):
+    for bad in ("arm 08:21", "arm", f"arm {int(feed.now - 60)}"):
+        w.on_command(bad, {})
+        assert watch.load() == {}, f"{bad!r} should not have armed anything"
+
+
+def test_the_board_hands_off_on_the_command_topic_it_already_listens_to(w):
+    """No new endpoint and no widened CORS: the reply path M2 already built."""
+    board = (pathlib.Path(__file__).resolve().parent.parent
+             / "web" / "board.html").read_text()
+    assert "magoun.cmd" in board, "the bell must know the command topic"
+    assert "`arm ${Math.round(next.eta)}" in board
+    assert "/live-extras.json" not in board.split("armAlert")[0]
+
+
+def test_re_arming_the_same_train_does_not_reset_the_plan(w, feed):
+    """An open tablet sends `arm` every minute. A fresh plan each time would
+    forget that leave-now had fired, and fire it again on the next tick."""
+    walk, band = 390, 75
+    eta = feed.now + walk + band
+    w.on_command(f"arm {int(eta)} G-10065", {})
+    feed.rows = [row(eta, vehicle="G-10065", band=band)]
+    w.tick()
+    assert feed.titles == ["Leave now"]
+
+    for _ in range(3):                       # the page, still open, re-arms
+        feed.now += 60
+        w.on_command(f"arm {int(eta)} G-10065", {})
+        w.tick()
+    assert feed.titles == ["Leave now"], "one train, one leave-now"
+
+
+def test_arming_a_different_train_starts_over(w, feed):
+    """Tapping the bell for the next train is a new commitment, not a refresh."""
+    eta = feed.now + 600
+    w.on_command(f"arm {int(eta)} G-10065", {})
+    watch.save({**watch.load(), "fired": {"leave": True}})
+    later = eta + 2 * HEADWAY
+    w.on_command(f"arm {int(later)} G-10199", {})
+    p = watch.load()
+    assert p["committed"]["target_eta"] == later
+    assert p["committed"]["vehicle"] == "G-10199"
+    assert p["fired"] == {}, "a different train has not been left for"

@@ -446,8 +446,12 @@ function buildStatus(now, snap, model, rows, berths, here, recent, line,
   const nxt = rows.find(r => r.eta > now) || null;
   return {
     now: now, version: model.version, at_station: at_station,
-    next: nxt && {eta: nxt.eta, lo: nxt.lo, hi: nxt.hi,
-                  source: nxt.source, backed: nxt.backed},
+    // `vehicle` is carried so the bell can name the train when it hands the alert
+    // to the notifier. A vehicle id is the only thing that tells a prediction flap
+    // from a no-show -- the timing of the two is identical -- so an arm without one
+    // costs the notifier its recovery.
+    next: nxt && {eta: nxt.eta, lo: nxt.lo, hi: nxt.hi, source: nxt.source,
+                  backed: nxt.backed, vehicle: nxt.vehicle},
     following: rows.slice(1, 5).map(r => ({eta: r.eta, source: r.source,
                                            skipped: r.skipped})),
     upstream: upstreamState({t: now, vehicles: snap.vehicles}, model),

@@ -1,10 +1,12 @@
 """Drive web/board.html in a real browser: from file://, and over HTTP.
 
 The contract test proves the JS computes the same rows as Python. It says nothing
-about whether the page loads at all, and two things here were wrong until measured:
-a board opened as file:// cannot fetch a sibling file (hence web/model.js), and the
-whole point of leaving a tablet open is the alert re-arming, which only the browser
-does. So this replays a fixture as if it were happening now and watches the page.
+about whether the page loads at all, and three things here were wrong until
+measured: a board opened as file:// cannot fetch a sibling file (hence web/model.js);
+ntfy's Sequence-ID does not replace a pending scheduled message, so re-arming on a
+timer queues real deliveries rather than refining one; and an armed alert therefore
+has to be handed to the notifier to be refined at all. So this replays a fixture as
+if it were happening now and watches what the page actually posts.
 
 Both shapes are covered because they differ. From file:// no sibling file can be
 fetched, so the model arrives as a script and the self-score panel hides itself.
@@ -30,7 +32,7 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 BOARD = "file://" + str(ROOT / "web" / "board.html")
 WALK_S = 390
-REARM_WAIT_S = 75        # board.html re-arms a pending alert every 60 s
+REARM_WAIT_S = 75        # board.html reconsiders the alert every 60 s
 ISO_KEYS = ("arrival_time", "departure_time", "updated_at")
 
 
@@ -199,6 +201,7 @@ def run(case_index: int, headed: bool) -> int:
         # there since breakfast, not a fresh visit.
         page.add_init_script(f"""
           localStorage.setItem("magoun.ntfy", "smoke-test-topic");
+          localStorage.setItem("magoun.cmd", "smoke-test-cmd");
           localStorage.setItem("magoun.armed", "1");
           localStorage.setItem("magoun.armedEta", "{int(time.time()) + 3600}");
           localStorage.setItem("magoun.walk", "{WALK_S}");
@@ -209,7 +212,8 @@ def run(case_index: int, headed: bool) -> int:
         def ntfy(route):
             req = route.request
             posts.append({"method": req.method, "at": req.header_value("at"),
-                          "seq": req.header_value("sequence-id"), "t": time.time()})
+                          "seq": req.header_value("sequence-id"), "t": time.time(),
+                          "url": req.url, "body": req.post_data})
             route.fulfill(status=200, json={"id": "stub"})
         # Nothing may reach the real ntfy.sh from a test.
         page.route(re.compile(r"ntfy\.sh"), ntfy)
@@ -245,30 +249,45 @@ def run(case_index: int, headed: bool) -> int:
         check("the schedule is cached per service day",
               any(k.startswith("magoun.sched.") for k in page.evaluate(
                   "Object.keys(localStorage)")))
-        check("the armed alert was posted on the first paint", len(posts) >= 1)
-        if posts:
-            at = int(posts[0]["at"])
+        sched = [q for q in posts if q["at"]]
+        check("the armed alert was posted on the first paint", len(sched) >= 1)
+        if sched:
+            at = int(sched[0]["at"])
             lo = json.loads(page.evaluate("JSON.stringify(data.next)"))["lo"]
             # Either the quantile the rider acts on, minus the walk, or -- when that
             # moment has already gone -- armAlert's floor of now + 11 s, which is
             # the "LEAVE NOW" case rather than an alert scheduled into the past.
             aimed = abs(at - (lo - WALK_S)) <= 2
-            clamped = abs(at - (posts[0]["t"] + 11)) <= 2
+            clamped = abs(at - (sched[0]["t"] + 11)) <= 2
             check("it fires at lo minus the walk, or now if that has passed",
                   aimed or clamped,
                   f"At={at} lo-walk={lo - WALK_S:.0f} "
                   f"{'(clamped to now+11)' if clamped else ''}")
-            check("it never schedules an alert into the past", at >= posts[0]["t"])
-            check("it replaces the pending alert rather than adding one",
-                  posts[0]["seq"] == "magoun-leave", str(posts[0]["seq"]))
+            check("it never schedules an alert into the past", at >= sched[0]["t"])
+            # Sequence-ID is sent so the ntfy APP collapses these in the tray. It
+            # does not replace the pending message: measured against ntfy.sh, three
+            # publishes with one Sequence-ID and one At deliver three times. The
+            # count below is the check that matters, not the header.
+            check("the alert is tagged for the app to collapse",
+                  sched[0]["seq"] == "magoun-leave", str(sched[0]["seq"]))
 
         print(f"\n  waiting {REARM_WAIT_S}s for the re-arm...")
         page.wait_for_timeout(REARM_WAIT_S * 1000)
-        check("the armed alert re-arms while the page stays open",
-              len(posts) >= 2, f"{len(posts)} posts in {REARM_WAIT_S + 6}s")
-        if len(posts) >= 2:
-            gap = posts[1]["t"] - posts[0]["t"]
-            check("it re-arms about once a minute", 55 <= gap <= 90, f"{gap:.0f}s apart")
+        # Every publish is a delivery, so re-arming on a timer buys nothing and
+        # costs a buzz. The page re-points the alert only when the leave time has
+        # actually moved, and hands the train to the notifier, which refines one
+        # alert instead of queueing more. Both posts below are to ntfy.sh: the
+        # scheduled leave-now, and the `arm` command.
+        leave = [q for q in posts if q["at"]]
+        cmds = [q for q in posts if "smoke-test-cmd" in (q["url"] or "")]
+        check("it does not queue a second alert for an unchanged leave time",
+              len(leave) == 1, f"{len(leave)} scheduled posts in {REARM_WAIT_S + 6}s")
+        check("the train is handed to the notifier on the command topic",
+              len(cmds) >= 1, f"{len(cmds)} command posts")
+        if cmds:
+            check("the handoff names the train as an epoch",
+                  re.fullmatch(r"arm \d{10} \S+", cmds[0]["body"] or ""),
+                  str(cmds[0]["body"]))
         check("the alert stays armed in the footer",
               "alert armed" in page.inner_text("#foot"))
         # The documented degradation: from file:// stats.json cannot be fetched at
