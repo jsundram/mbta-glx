@@ -106,3 +106,31 @@ def test_fixtures_are_self_contained():
             assert {"now", "walk", "qs", "horizon", "berths", "skipped",
                     "slots", "preds", "vehicles", "expected"} <= set(c)
             assert c["slots"], "a fixture with no schedule cannot test the schedule tier"
+
+
+# --- the static bundle: what the browser is allowed to read ---
+
+WEB = pathlib.Path(__file__).resolve().parent.parent / "web"
+CONSTANTS = {"veto_window_s", "stale_vehicle_s", "dedupe_s", "min_gap_s",
+             "horizon_s", "band_s", "stops", "glx", "alert_corridor"}
+
+
+def test_web_model_is_the_published_copy():
+    """web/model.json is what the static board reads; a stale copy is a silent fork."""
+    assert json.loads((WEB / "model.json").read_text()) == \
+        json.loads((service.ROOT / "data" / "model.json").read_text()), \
+        "web/model.json is out of date: re-copy data/model.json after a refit"
+
+
+def test_model_carries_every_constant_the_port_needs():
+    """Anything the JS would otherwise re-type has to be in model.json."""
+    got = set(json.loads((WEB / "model.json").read_text())["constants"])
+    assert CONSTANTS <= got, f"model.json is missing: {sorted(CONSTANTS - got)}"
+
+
+def test_glx_stops_match_the_python_definition():
+    c = json.loads((WEB / "model.json").read_text())["constants"]
+    assert [tuple(t) for t in c["glx"]] == service.GLX_STOPS
+    assert set(c["alert_corridor"]) == service.CORRIDOR
+    assert c["stops"] == {"magoun_in": service.MAGOUN_IN, "ball_in": service.BALL_IN,
+                          "med_in": service.MED_IN, "med_out": service.MED_OUT}

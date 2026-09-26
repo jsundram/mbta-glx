@@ -5,9 +5,14 @@ import pathlib
 import numpy as np
 import polars as pl
 
+import service
 from model import BASE, MAXD, TIERS
 
-OUT = pathlib.Path(__file__).resolve().parent.parent / "data" / "model.json"
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+OUT = ROOT / "data" / "model.json"
+# The static board fetches model.json as a sibling asset, so a refit has to
+# reach web/ too or the browser keeps predicting from the previous rating.
+WEB_OUT = ROOT / "web" / "model.json"
 DESTINATIONS = {
     "70502": "Lechmere", "70206": "North Station", "70202": "Government Center",
     "70199": "Park Street", "70159": "Boylston", "70155": "Copley",
@@ -79,6 +84,10 @@ def main() -> None:
                    "departed Medford/Tufts": 33},
         "stops": {"magoun_in": "70508", "ball_in": "70510",
                   "med_in": "70512", "med_out": "70511"},
+        # The board draws the line map and filters alerts from these, so the
+        # static frontend does not keep a second copy of the stop ids.
+        "glx": [list(t) for t in service.GLX_STOPS],
+        "alert_corridor": sorted(service.CORRIDOR),
     }
 
     hw = df.sort("magoun_arr").with_columns(
@@ -86,7 +95,8 @@ def main() -> None:
     hw = hw[(hw > 30) & (hw < 7200)]
     model["headway_median_s"] = float(np.median(hw))
     OUT.write_text(json.dumps(model))
-    print(f"wrote {OUT} from {model['n_legs']} legs over {model['days']} days")
+    WEB_OUT.write_text(OUT.read_text())
+    print(f"wrote {OUT} and {WEB_OUT} from {model['n_legs']} legs over {model['days']} days")
     print("  median headway", round(model["headway_median_s"] / 60, 1), "min")
     for t in TIERS:
         q = model["tiers"][t]["q"]
