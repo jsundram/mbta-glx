@@ -723,3 +723,73 @@ def test_the_cancel_button_still_cancels_whatever_is_running(w, feed):
     w.on_command("cancel", {})
     assert watch.load() == {}
     assert feed.titles == ["Cancelled"]
+
+
+# --- review round 2: the lock, in the direction the first fix missed ---
+
+def test_a_tick_push_does_not_block_a_tap(w, feed, monkeypatch):
+    """The command path was taken off the lock; the tick still pushed under it,
+    so a recovery against an unreachable ntfy froze every button for ~64 s."""
+    eta = feed.now + 600
+    arm(feed, eta, vehicle="G-10065", fired={"leave": True})
+    feed.rows = [row(eta + 400, vehicle="G-10065")]     # provokes a revision
+    sending, release = threading.Event(), threading.Event()
+
+    def slow(*a, **k):
+        sending.set()
+        release.wait(timeout=10)
+        return True
+
+    monkeypatch.setattr(watch.notify, "send", slow)
+    ticking = threading.Thread(target=w.tick)
+    ticking.start()
+    assert sending.wait(timeout=5), "the tick never pushed"
+
+    tapped = threading.Event()
+    threading.Thread(target=lambda: (w.on_command("left", {}), tapped.set())).start()
+    done = tapped.wait(timeout=5)
+    release.set()
+    ticking.join(timeout=10)
+    assert done, "the tap was stuck behind a push holding the plan lock"
+
+
+def test_an_early_return_still_delivers_what_it_queued(w, feed):
+    """A stated skip recovers and returns immediately. Queue the push and send it
+    after the loop and it is silently dropped -- the rider is told nothing."""
+    eta = feed.now + 900
+    arm(feed, eta, vehicle="G-10065")
+    feed.rows = [row(eta, vehicle="G-10065", skipped=True),
+                 row(eta + HEADWAY, vehicle="G-10199")]
+    w.tick()
+    assert feed.titles and "Best now is" in feed.sent[0]["message"]
+
+
+def test_the_outbox_is_cleared_even_when_a_tick_raises(w, feed, monkeypatch):
+    """Left set, every later push would queue into a list nobody drains."""
+    arm(feed, feed.now + 900, vehicle="G-10065")
+    monkeypatch.setattr(watch.service, "etas",
+                        lambda *a, **k: (_ for _ in ()).throw(ValueError("boom")))
+    try:
+        w.tick()
+    except ValueError:
+        pass
+    assert w._outbox is None
+
+
+def test_recovery_reads_the_berths_of_its_own_snapshot(w, feed, monkeypatch):
+    """_options reached into the live tracker, which the other thread mutates
+    mid-iteration -- RuntimeError: dictionary changed size during iteration.
+
+    Checked by what reaches brief.options, not by grepping the source: the first
+    version of this asserted "self.berths.seen" was absent and failed on the
+    comment explaining why it is absent.
+    """
+    got = {}
+    monkeypatch.setattr(watch.brief, "options",
+                        lambda dest, dl, walk, m, snap, berths: got.setdefault(
+                            "berths", berths) and [] or [])
+    w.berths.seen = {"G-STALE": 1.0}          # the live tracker, mid-mutation
+    mine = {"G-SNAP": 2.0}                    # what this snapshot actually saw
+    p = {"dest": "70199", "deadline": feed.now + 3600, "walk": 390}
+    w._options(p, [], {"t": feed.now}, mine)
+    assert got["berths"] == mine, "it must use the snapshot's berths, not the live dict"

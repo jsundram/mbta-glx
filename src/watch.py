@@ -118,6 +118,10 @@ class Watcher:
         # now touched from both threads because snapshots are taken outside `lock`.
         self.lock = threading.Lock()
         self.berth_lock = threading.Lock()
+        # Set for the duration of a tick, which holds `lock`. Pushes queue here and
+        # go out after it is released -- see _push. Only the main loop ticks, so
+        # this is never touched by two threads at once.
+        self._outbox: list | None = None
 
     # ---- plan lifecycle ----
     def new_plan(self, dest: str, hhmm: str, conf: float = 0.90) -> dict:
@@ -201,6 +205,18 @@ class Watcher:
             + (f" ({vehicle})" if vehicle else " (no vehicle id)"))
         return p
 
+    def _push(self, title: str, body: str, **kw) -> bool:
+        """Send, or queue if a tick is holding the plan lock.
+
+        notify.send retries three times with 20 s timeouts -- about 64 s against
+        an unreachable ntfy -- and every button tap waits on that same lock. The
+        command path was fixed for this; the tick is the other direction.
+        """
+        if self._outbox is None:
+            return notify.send(title, body, **kw)
+        self._outbox.append((title, body, kw))
+        return True
+
     def _snapshot(self):
         """Fetch, then fold into the berth tracker. Deliberately not under `lock`:
         this is a network round trip and the plan does not need protecting for it."""
@@ -239,7 +255,7 @@ class Watcher:
         the same pick buttons, so a bare arm can still be re-pointed by hand.
         """
         rows = service.etas(snap, self.model, p["walk"], berths=b)
-        opts = self._options(p, rows, snap)[:3]
+        opts = self._options(p, rows, snap, b)[:3]
         if not opts:
             notify.send("Nothing predicted", "No inbound trains upstream right now.",
                         priority=2, tags=["tram"])
@@ -301,98 +317,114 @@ class Watcher:
         if not load().get("committed"):
             return
         snap, b = self._snapshot()          # network, before taking the lock
-        with self.lock:
-            p = load()
-            if not p or not p.get("committed"):
-                return
-            if time.time() > p["deadline"] + 1800:
-                STATE.unlink(missing_ok=True)
-                return
-            rows = service.etas(snap, self.model, p["walk"], berths=b)
-            com = p["committed"]
-            tgt = com["target_eta"]
-            # A skipped/cancelled train is stated, not inferred. Act at once rather
-            # than waiting out the 240 s debounce built for a noisy feed.
-            hit = [r for r in rows if r.get("skipped")
-                   and abs(r["eta"] - tgt) <= MATCH]
-            if hit and not p["fired"].get("recover"):
-                log(f"MBTA says the {fmt(tgt)} is not stopping at Magoun")
-                self._recover(p, rows, snap)
-                return
-            row = match_target(rows, com, self.model.headway)
-            if row is not None and abs(row["eta"] - tgt) > MATCH:
-                log(f"target drifted {(row['eta']-tgt)/60:+.1f} min "
-                    f"to {fmt(row['eta'])} (still tracking)")
-            if row is None:
-                miss = p["committed"].get("misses", 0) + 1
-                p["committed"]["misses"] = miss
-                log(f"no match for {fmt(tgt)} ({miss}/{MISS_TICKS})")
-                save(p)
-                if miss >= MISS_TICKS:
-                    # Silence is not a statement. The feed going quiet for 240 s is
-                    # a flap as often as a no-show, so the commitment is kept and
-                    # re-pointed rather than dropped -- _recover is for the cases
-                    # where something was actually said (a skip) or there is
-                    # genuinely nothing left to point at.
-                    self._uncertain(p, rows, snap)
-                return
-            com["misses"] = 0
-            com["target_eta"] = row["eta"]
-            if row.get("vehicle"):
-                com["vehicle"] = row["vehicle"]
-            now = snap["t"]
-            # Keep the rider current: any material ETA move gets announced, both
-            # ways, for as long as it keeps moving.
-            slip = row["eta"] - com.get("original_eta", row["eta"])
-            if com.get("announced_eta") is not None:
-                self._announce(p, row, now, "Updated arrival time")
-            elif slip >= DRIFT_ALERT:
-                self._announce(p, row, now, "Your train is running late")
-
-            leave_by = row["lo"] - p["walk"]
-            if not p["fired"].get("leave") and now >= leave_by - TICK / 2:
-                # The notifier fires at a wall-clock instant; the host it runs on
-                # does not guarantee one. A sleeping Mac runs the missed tick on
-                # wake, and launchd will happily deliver it minutes late. By then
-                # the walk may no longer fit before the train, and "Leave now" for
-                # a train that cannot be reached is worse than the silence it
-                # replaces -- it sends the rider out for nothing. The walk is the
-                # test, so no new constant: if it still fits, go.
-                if row["eta"] - now < p["walk"]:
-                    log(f"LEAVE NOW for {fmt(row['eta'])} is "
-                        f"{(now - leave_by):.0f}s late; the walk no longer fits")
-                    p["fired"]["leave"] = True
-                    save(p)
-                    self._recover(p, rows, snap, head="You can't make that one")
+        # Warm the alert cache (120 s TTL) out here too: brief.options asks
+        # service.blocking whether the destination is reachable, which fetches,
+        # and under the lock that is another stall on every button tap.
+        service.alerts()
+        self._outbox = outbox = []
+        try:
+            with self.lock:
+                p = load()
+                if not p or not p.get("committed"):
                     return
-                o = self._detail(p, snap, b, row)
-                extra = (f"\ncatch {o['p_catch']:.0%} · on time {o['p_ontime']:.0%}"
-                         f" · 95% there by {fmt(o['dest_p95'])}") if o else ""
-                notify.send(
-                    "Leave now", f"{fmt(row['eta'])} train · "
-                    f"{(row['eta']-now)/60:.0f} min out · via {row['source']}"
-                    f" (+/-{(row['hi']-row['lo'])/2:.0f}s){extra}",
-                    priority=5, tags=["runner"],
-                    actions=[notify.reply_action("On my way", "left"),
-                             notify.reply_action("Next one", "bump"),
-                             notify.reply_action("Cancel", "cancel")])
-                p["fired"]["leave"] = True
-                log(f"fired LEAVE NOW for {fmt(row['eta'])} via {row['source']}")
-            # Adjust: fires once the train is moving and the ETA is sharp.
-            if (p.get("left_at") and not p["fired"].get("adjust")
-                    and row["source"] in ADJUST_SOURCES):
-                arrive = p["left_at"] + p["walk"]
-                slack = row["eta"] - arrive
-                verb = ("you're fine" if slack > 45 else
-                        "pick it up" if slack > -30 else "you'll miss it")
-                notify.send(
-                    f"{(row['eta']-now)/60:.1f} min to your train",
-                    f"{verb} · {slack:+.0f}s of slack · +/-"
-                    f"{(row['hi']-row['lo'])/2:.0f}s",
-                    priority=4, tags=["steam_locomotive"])
-                p["fired"]["adjust"] = True
-                log(f"fired ADJUST slack={slack:+.0f}s via {row['source']}")
-            save(p)
+                if time.time() > p["deadline"] + 1800:
+                    STATE.unlink(missing_ok=True)
+                    return
+                rows = service.etas(snap, self.model, p["walk"], berths=b)
+                com = p["committed"]
+                tgt = com["target_eta"]
+                # A skipped/cancelled train is stated, not inferred. Act at once rather
+                # than waiting out the 240 s debounce built for a noisy feed.
+                hit = [r for r in rows if r.get("skipped")
+                       and abs(r["eta"] - tgt) <= MATCH]
+                if hit and not p["fired"].get("recover"):
+                    log(f"MBTA says the {fmt(tgt)} is not stopping at Magoun")
+                    self._recover(p, rows, snap, b)
+                    return
+                row = match_target(rows, com, self.model.headway)
+                if row is not None and abs(row["eta"] - tgt) > MATCH:
+                    log(f"target drifted {(row['eta']-tgt)/60:+.1f} min "
+                        f"to {fmt(row['eta'])} (still tracking)")
+                if row is None:
+                    miss = p["committed"].get("misses", 0) + 1
+                    p["committed"]["misses"] = miss
+                    log(f"no match for {fmt(tgt)} ({miss}/{MISS_TICKS})")
+                    save(p)
+                    if miss >= MISS_TICKS:
+                        # Silence is not a statement. The feed going quiet for 240 s is
+                        # a flap as often as a no-show, so the commitment is kept and
+                        # re-pointed rather than dropped -- _recover is for the cases
+                        # where something was actually said (a skip) or there is
+                        # genuinely nothing left to point at.
+                        self._uncertain(p, rows, snap, b)
+                    return
+                com["misses"] = 0
+                com["target_eta"] = row["eta"]
+                if row.get("vehicle"):
+                    com["vehicle"] = row["vehicle"]
+                now = snap["t"]
+                # Keep the rider current: any material ETA move gets announced, both
+                # ways, for as long as it keeps moving.
+                slip = row["eta"] - com.get("original_eta", row["eta"])
+                if com.get("announced_eta") is not None:
+                    self._announce(p, row, now, "Updated arrival time")
+                elif slip >= DRIFT_ALERT:
+                    self._announce(p, row, now, "Your train is running late")
+
+                leave_by = row["lo"] - p["walk"]
+                if not p["fired"].get("leave") and now >= leave_by - TICK / 2:
+                    # The notifier fires at a wall-clock instant; the host it runs on
+                    # does not guarantee one. A sleeping Mac runs the missed tick on
+                    # wake, and launchd will happily deliver it minutes late. By then
+                    # the walk may no longer fit before the train, and "Leave now" for
+                    # a train that cannot be reached is worse than the silence it
+                    # replaces -- it sends the rider out for nothing. The walk is the
+                    # test, so no new constant: if it still fits, go.
+                    if row["eta"] - now < p["walk"]:
+                        log(f"LEAVE NOW for {fmt(row['eta'])} is "
+                            f"{(now - leave_by):.0f}s late; the walk no longer fits")
+                        p["fired"]["leave"] = True
+                        save(p)
+                        self._recover(p, rows, snap, b,
+                                      head="You can't make that one")
+                        return
+                    o = self._detail(p, snap, b, row)
+                    extra = (f"\ncatch {o['p_catch']:.0%} · on time {o['p_ontime']:.0%}"
+                             f" · 95% there by {fmt(o['dest_p95'])}") if o else ""
+                    self._push(
+                        "Leave now", f"{fmt(row['eta'])} train · "
+                        f"{(row['eta']-now)/60:.0f} min out · via {row['source']}"
+                        f" (+/-{(row['hi']-row['lo'])/2:.0f}s){extra}",
+                        priority=5, tags=["runner"],
+                        actions=[notify.reply_action("On my way", "left"),
+                                 notify.reply_action("Next one", "bump"),
+                                 notify.reply_action("Cancel", "cancel")])
+                    p["fired"]["leave"] = True
+                    log(f"fired LEAVE NOW for {fmt(row['eta'])} via {row['source']}")
+                # Adjust: fires once the train is moving and the ETA is sharp.
+                if (p.get("left_at") and not p["fired"].get("adjust")
+                        and row["source"] in ADJUST_SOURCES):
+                    arrive = p["left_at"] + p["walk"]
+                    slack = row["eta"] - arrive
+                    verb = ("you're fine" if slack > 45 else
+                            "pick it up" if slack > -30 else "you'll miss it")
+                    self._push(
+                        f"{(row['eta']-now)/60:.1f} min to your train",
+                        f"{verb} · {slack:+.0f}s of slack · +/-"
+                        f"{(row['hi']-row['lo'])/2:.0f}s",
+                        priority=4, tags=["steam_locomotive"])
+                    p["fired"]["adjust"] = True
+                    log(f"fired ADJUST slack={slack:+.0f}s via {row['source']}")
+                save(p)
+        finally:
+            # In `finally`, because the tick returns early on a skip, a recovery
+            # and a lapsed deadline -- and every one of those paths has queued a
+            # push. The `with` above has already released the lock by the time
+            # this runs, which is the whole point.
+            self._outbox = None
+            for title, body, kw in outbox:
+                notify.send(title, body, **kw)
+
 
     def _announce(self, p: dict, row: dict, now: float, why: str) -> None:
         """Tell the rider the ETA moved. Revisions continue for as long as it keeps
@@ -411,7 +443,7 @@ class Watcher:
         where = (f"{(row['eta'] - now) / 60:.0f} min away"
                  if p.get("fired", {}).get("leave")
                  else f"leave {fmt(row['lo'] - p['walk'])}")
-        notify.send(
+        self._push(
             why,
             f"Now expected {fmt(row['eta'])} ({delta/60:+.0f} min vs your pick) · "
             f"+/-{(row['hi']-row['lo'])/2:.0f}s · {where}",
@@ -421,7 +453,7 @@ class Watcher:
         com["announced_at"] = now
         log(f"announced revision -> {fmt(row['eta'])} ({delta/60:+.1f} min)")
 
-    def _uncertain(self, p: dict, rows: list, snap: dict) -> None:
+    def _uncertain(self, p: dict, rows: list, snap: dict, berths: dict) -> None:
         """Nothing matched for MISS_TICKS. Adopt the best candidate and SAY SO.
 
         The commitment is not dropped: a flap of about one headway looks exactly
@@ -441,7 +473,7 @@ class Watcher:
         if not cand:
             # Nothing to follow. That is the one case where dropping the
             # commitment is honest, and _recover is what says so with options.
-            self._recover(p, rows, snap)
+            self._recover(p, rows, snap, berths)
             return
         row = min(cand, key=lambda r: abs(r["eta"] - com["target_eta"]))
         com["target_eta"] = row["eta"]
@@ -451,7 +483,7 @@ class Watcher:
         self._announce(p, row, snap["t"], "Your train may be running late")
         save(p)
 
-    def _options(self, p: dict, rows: list, snap: dict) -> list[dict]:
+    def _options(self, p: dict, rows: list, snap: dict, berths: dict) -> list[dict]:
         """Ranked alternatives to the committed train.
 
         A plan made by `plan` has a destination and a deadline, so the ranking is
@@ -461,14 +493,21 @@ class Watcher:
         `p_ontime` is None rather than a number nothing computed.
         """
         if p.get("dest"):
+            # `berths`, not self.berths.seen: the tracker is mutated by whichever
+            # thread last took a snapshot, and compute_rows iterates what it is
+            # given (`sorted(berths.items())`). Reading the live dict raced a
+            # `del` in BerthTracker.update -- RuntimeError: dictionary changed
+            # size during iteration, mid-tick. The caller already has the copy
+            # that belongs to this snapshot.
             return brief.options(p["dest"], p["deadline"], p["walk"],
-                                 self.model, snap, self.berths.seen)
+                                 self.model, snap, berths)
         return [{"eta": r["eta"], "leave_by": r["lo"] - p["walk"], "p_ontime": None,
                  "vehicle": r.get("vehicle"),
                  "catchable": r["lo"] - p["walk"] >= snap["t"]}
                 for r in rows if not r.get("skipped")]
 
-    def _recover(self, p: dict, rows: list, snap: dict, head: str = "") -> None:
+    def _recover(self, p: dict, rows: list, snap: dict, berths: dict,
+                 head: str = "") -> None:
         """Offer the best remaining train and let go of the committed one.
 
         `head` overrides the headline for a caller that already knows why -- the
@@ -477,7 +516,7 @@ class Watcher:
         """
         if p["fired"].get("recover"):
             return
-        opts = self._options(p, rows, snap)
+        opts = self._options(p, rows, snap, berths)
         nxt = next((o for o in opts if o["catchable"]), None)
         if nxt:
             # It may be the same train running late -- the feed cannot distinguish
@@ -488,7 +527,7 @@ class Watcher:
                             else "That train is not stopping at Magoun")
             odds = (f" · {nxt['p_ontime']:.0%} for {fmt(p['deadline'])}"
                     if nxt.get("p_ontime") is not None else "")
-            notify.send(
+            self._push(
                 head,
                 f"Best now is {fmt(nxt['eta'])}{odds} · leave {fmt(nxt['leave_by'])}",
                 priority=5, tags=["warning"],
@@ -506,7 +545,7 @@ class Watcher:
             # A board arm has no deadline -- `deadline` there is a synthetic
             # eta + 1800 -- so naming one describes a commitment never made.
             why = ("for your deadline" if p.get("dest") else "you can still walk to")
-            notify.send(head or "That train vanished",
+            self._push(head or "That train vanished",
                         f"No good option left {why}.",
                         priority=5, tags=["warning"])
         log("fired RECOVERY: committed train no longer predicted")
