@@ -67,6 +67,20 @@ def main() -> None:
         model["rides"][stop] = {"name": name, "n": int(len(r)),
                                 "q": [float(x) for x in np.quantile(np.sort(r), GRID)]}
 
+    # Every constant a consumer needs, so a JavaScript port reads them rather
+    # than re-typing them. architecture.md: one source for the constants.
+    model["constants"] = {
+        "veto_window_s": 480,       # imminent scheduled train, nothing upstream
+        "stale_vehicle_s": 180,     # older position = parked ghost, not service
+        "dedupe_s": 240,            # a schedule row this close to a live row is it
+        "min_gap_s": 120,           # keep schedule rows this far past the last row
+        "horizon_s": 45 * 60,
+        "band_s": {"mbta": 75, "departed Ball Sq": 7,
+                   "departed Medford/Tufts": 33},
+        "stops": {"magoun_in": "70508", "ball_in": "70510",
+                  "med_in": "70512", "med_out": "70511"},
+    }
+
     hw = df.sort("magoun_arr").with_columns(
         g=pl.col("magoun_arr").diff().over("service_date"))["g"].drop_nulls().to_numpy()
     hw = hw[(hw > 30) & (hw < 7200)]

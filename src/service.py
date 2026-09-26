@@ -93,6 +93,10 @@ class Model:
         b = self.m["berth"]
         return b["turn_plus_run"], b["sched_bias"]
 
+    def const(self, name: str, default=None):
+        """Constants live in model.json so both implementations read one source."""
+        return self.m.get("constants", {}).get(name, default)
+
     @property
     def headway(self) -> float:
         return self.m["headway_median_s"]
@@ -184,10 +188,10 @@ class BerthTracker:
         return dict(self.seen)
 
 
-def _live(attrs: dict, now: float) -> bool:
+def _live(attrs: dict, now: float, stale_s: float = STALE_VEHICLE) -> bool:
     """False for stale positions: parked, out-of-service trains sit for hours."""
     u = _iso(attrs.get("updated_at"))
-    return u is not None and (now - u) <= STALE_VEHICLE
+    return u is not None and (now - u) <= stale_s
 
 
 def _revenue(attrs: dict) -> bool:
@@ -403,14 +407,14 @@ def line_map(snap: dict) -> list[dict]:
     return out
 
 
-def upstream_state(snap: dict) -> dict:
+def upstream_state(snap: dict, stale_s: float = STALE_VEHICLE) -> dict:
     """Where each inbound GLX train is right now, from vehicle positions."""
     out = {"departed_ball": [], "departed_med": [], "at_terminus": 0,
            "ghosts": 0, "non_revenue": 0}
     for v in snap["vehicles"]:
         a, rel = v["attributes"], v["relationships"]
         stop = (rel["stop"]["data"] or {}).get("id")
-        if not _live(a, snap["t"]):
+        if not _live(a, snap["t"], stale_s):
             out["ghosts"] += 1
             continue
         if not _revenue(a):
@@ -441,7 +445,13 @@ def compute_rows(now: float, preds: list, vehicles: list, model: Model,
     fixtures are what a JS port will be checked against.
     """
     ql, qm, qh = qs
-    state = upstream_state({"t": now, "vehicles": vehicles})
+    bands = model.const("band_s", {"mbta": 75, "departed Ball Sq": 7,
+                                   "departed Medford/Tufts": 33})
+    veto = model.const("veto_window_s", VETO_WINDOW)
+    dedupe = model.const("dedupe_s", 240)
+    min_gap = model.const("min_gap_s", 120)
+    state = upstream_state({"t": now, "vehicles": vehicles},
+                           stale_s=model.const("stale_vehicle_s", STALE_VEHICLE))
     rows: list[dict] = []
 
     # 1. MBTA's own inbound predictions -- the operator's model, use it first.
@@ -454,11 +464,12 @@ def compute_rows(now: float, preds: list, vehicles: list, model: Model,
         if t and t > now:
             mbta.append((t, (rel.get("vehicle", {}).get("data") or {}).get("id")))
     for t, vid in sorted(mbta):
-        src, band = "mbta", 75.0
+        src = "mbta"
         if vid and vid in state["departed_ball"]:
-            src, band = "departed Ball Sq", 7.0
+            src = "departed Ball Sq"
         elif vid and vid in state["departed_med"]:
-            src, band = "departed Medford/Tufts", 33.0
+            src = "departed Medford/Tufts"
+        band = float(bands[src])
         rows.append({"eta": t, "lo": t - band, "hi": t + band,
                      "source": src, "backed": True, "vehicle": vid})
 
@@ -486,10 +497,10 @@ def compute_rows(now: float, preds: list, vehicles: list, model: Model,
     last = max([r["eta"] for r in rows], default=now)
     for s, trip in slots_with_trips(slots, skipped):
         mid = s + model.sched_offset(qm)
-        if mid <= max(now, last + 120) or mid > now + horizon:
+        if mid <= max(now, last + min_gap) or mid > now + horizon:
             continue
-        backed = not (s - now < VETO_WINDOW and state["at_terminus"] == 0)
-        if any(abs(r["eta"] - mid) < 240 for r in rows):
+        backed = not (s - now < veto and state["at_terminus"] == 0)
+        if any(abs(r["eta"] - mid) < dedupe for r in rows):
             continue
         rows.append({"eta": mid, "lo": s + model.sched_offset(ql),
                      "hi": s + model.sched_offset(qh),

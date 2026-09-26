@@ -118,8 +118,10 @@ Mitigations, in order of importance:
 2. **A contract test.** Fixed snapshots in `tests/fixtures/`, run through both
    implementations, assert identical rows. This must exist before the JS port is
    trusted, not after.
-3. **One source for the constants.** `turn_plus_run`, `sched_bias`, tier order and
-   thresholds live in `model.json`, not in either codebase.
+3. **One source for the constants.** Done: `model.json` now carries a `constants`
+   block — `veto_window_s`, `stale_vehicle_s`, `dedupe_s`, `min_gap_s`,
+   `horizon_s`, the per-source `band_s`, and the stop ids. `service.py` reads them
+   from there, so a JS port reads the same file rather than re-typing numbers.
 
 If the JS starts growing past arithmetic, that is the signal to fall back to a thin
 backend serving `/status` — less work, gives up the static property.
@@ -152,10 +154,27 @@ that quietly drops a tier — so `test_every_tier_is_exercised_by_some_fixture`
 asserts all six sources appear, and the generator synthesises a skipped-tier case
 because skips are too rare to catch by sampling.
 
-### M2 — Static board *(the tablet dashboard becomes real)*
-- `web/app.js` ports the pure function; `web/board.html` is the current UI.
-- Live data direct from `api-v3.mbta.com`; `model.json` as a sibling asset.
-- Contract test: fixtures through both implementations, identical rows.
+### M2 — Static board *(the tablet dashboard becomes real)* ◀ next
+
+Port `service.compute_rows` to `web/app.js`. Everything it needs is already data:
+
+- **Inputs** are exactly the fixture keys: `now, preds, vehicles, model, walk, qs,
+  horizon, berths, slots, skipped`. The fixtures hold v3-shaped `preds`/`vehicles`
+  — the same shape `api-v3.mbta.com` returns — so the JS can consume them directly
+  with no adapter.
+- **Constants** come from `model.json.constants`; do not re-type them.
+- **Helpers to port with it**: `upstream_state`, `_live` (stale positions),
+  `_revenue` (deadheads run express and must not satisfy the veto).
+- **Berth state** is observed across polls, not derivable from one snapshot —
+  `BerthTracker` has to be ported too, or the berth tier silently never fires.
+- **Reuse the UI**: `src/status.html` is the board; only its data source changes.
+
+Then extend `tests/test_contract.py` to run `tests/fixtures/cases-*.json` through
+node as well as Python and assert identical rows.
+
+**Done when:** the board runs from `file://` with the Mac server stopped, an iPad
+left open keeps re-arming an alert, and both implementations agree on all 26
+fixtures.
 
 **Done when:** the board runs from `file://` with the Mac server stopped, and an
 iPad left open keeps re-arming an alert.
