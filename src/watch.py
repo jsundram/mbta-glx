@@ -289,6 +289,20 @@ class Watcher:
 
             leave_by = row["lo"] - p["walk"]
             if not p["fired"].get("leave") and now >= leave_by - TICK / 2:
+                # The notifier fires at a wall-clock instant; the host it runs on
+                # does not guarantee one. A sleeping Mac runs the missed tick on
+                # wake, and launchd will happily deliver it minutes late. By then
+                # the walk may no longer fit before the train, and "Leave now" for
+                # a train that cannot be reached is worse than the silence it
+                # replaces -- it sends the rider out for nothing. The walk is the
+                # test, so no new constant: if it still fits, go.
+                if row["eta"] - now < p["walk"]:
+                    log(f"LEAVE NOW for {fmt(row['eta'])} is "
+                        f"{(now - leave_by):.0f}s late; the walk no longer fits")
+                    p["fired"]["leave"] = True
+                    save(p)
+                    self._recover(p, rows, snap, head="You can't make that one")
+                    return
                 o = self._detail(p, snap, b, row)
                 extra = (f"\ncatch {o['p_catch']:.0%} · on time {o['p_ontime']:.0%}"
                          f" · 95% there by {fmt(o['dest_p95'])}") if o else ""
@@ -384,7 +398,13 @@ class Watcher:
                  "catchable": r["lo"] - p["walk"] >= snap["t"]}
                 for r in rows if not r.get("skipped")]
 
-    def _recover(self, p: dict, rows: list, snap: dict) -> None:
+    def _recover(self, p: dict, rows: list, snap: dict, head: str = "") -> None:
+        """Offer the best remaining train and let go of the committed one.
+
+        `head` overrides the headline for a caller that already knows why -- the
+        default wording is about a train that stopped being predicted, which is
+        not the same story as a leave-now the host was asleep for.
+        """
         if p["fired"].get("recover"):
             return
         opts = self._options(p, rows, snap)
@@ -394,8 +414,8 @@ class Watcher:
             # that from a no-show when the gap is about one headway. Ask.
             gap = nxt["eta"] - p["committed"]["target_eta"] if p.get("committed") else 0
             same_ish = 0 < gap < self.model.headway * 1.5
-            head = ("Your train may be running late" if same_ish
-                    else "That train is not stopping at Magoun")
+            head = head or ("Your train may be running late" if same_ish
+                            else "That train is not stopping at Magoun")
             odds = (f" · {nxt['p_ontime']:.0%} for {fmt(p['deadline'])}"
                     if nxt.get("p_ontime") is not None else "")
             notify.send(
@@ -407,7 +427,8 @@ class Watcher:
             p["options"] = [{"eta": o["eta"], "p": o["p_ontime"],
                              "vehicle": o.get("vehicle")} for o in opts[:3]]
         else:
-            notify.send("That train vanished", "No good option left for your deadline.",
+            notify.send(head or "That train vanished",
+                        "No good option left for your deadline.",
                         priority=5, tags=["warning"])
         log("fired RECOVERY: committed train no longer predicted")
         p["fired"]["recover"] = True

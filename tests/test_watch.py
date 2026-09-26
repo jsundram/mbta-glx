@@ -81,6 +81,11 @@ def w(feed, monkeypatch):
     return watcher
 
 
+def fmt_in(message, eta):
+    """Is that train named in the message? watch.fmt is the notifier's own clock."""
+    return watch.fmt(eta) in message
+
+
 def arm(feed, target, *, vehicle=None, walk=390, fired=None):
     """Write the plan a commitment leaves behind, as `commit` would have."""
     p = {"dest": "70199", "deadline": feed.now + 5400, "conf": 0.90, "walk": walk,
@@ -448,3 +453,36 @@ def test_no_adjust_until_the_rider_says_they_left(w, feed):
     feed.rows = [row(eta, vehicle="G-10065", source="departed Ball Sq", band=7)]
     w.tick()
     assert feed.titles == []
+
+
+# --- the host is a Mac and it sleeps: launchd runs the missed tick on wake ---
+
+def test_a_late_tick_does_not_send_the_rider_out_for_a_missed_train(w, feed):
+    """The whole reason M5 wanted an always-on host. Staying on this one means the
+    gap has to be visible instead of silent -- and a leave-now for a train the walk
+    no longer reaches is worse than the silence, not better."""
+    walk, band = 390, 75
+    eta = feed.now + 1200
+    arm(feed, eta, vehicle="G-10065", walk=walk)
+    feed.rows = [row(eta, vehicle="G-10065", band=band)]
+    w.tick()
+    assert feed.titles == []
+
+    feed.now = eta - 120                       # asleep through the leave moment
+    feed.rows = [row(eta, vehicle="G-10065", band=band),
+                 row(eta + HEADWAY, vehicle="G-10199", band=band)]
+    w.tick()
+    assert "Leave now" not in feed.titles
+    assert feed.titles == ["You can't make that one"]
+    assert fmt_in(feed.sent[0]["message"], eta + HEADWAY), "it names the next one"
+
+
+def test_a_leave_now_a_few_seconds_late_still_fires(w, feed):
+    """A slow tick is not a missed train. The walk still fits, so go."""
+    walk, band = 390, 75
+    eta = feed.now + walk + band + 40
+    arm(feed, eta, vehicle="G-10065", walk=walk)
+    feed.rows = [row(eta, vehicle="G-10065", band=band)]
+    feed.now += 60                             # a minute past lo - walk
+    w.tick()
+    assert feed.titles == ["Leave now"]
