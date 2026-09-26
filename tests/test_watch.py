@@ -12,7 +12,6 @@ The three seams are stubbed and nothing else: where the snapshot comes from, wha
 `etas` makes of it, and where a push goes. The plan file, the matching, the
 debounce and the decision to fire are the real code.
 """
-import json
 import os
 import pathlib
 import sys
@@ -168,3 +167,79 @@ def test_leave_now_waits_for_the_low_quantile_not_the_median(w, feed):
     feed.now += 2 * watch.TICK
     w.tick()
     assert feed.titles == ["Leave now"]
+
+
+# --- launch-plan.md:460 -- "a commitment is no longer dropped when the match is
+#     lost". The code that does that was written and never called: tick sent the
+#     debounce straight to _recover, which sets committed = None. ---
+
+def test_a_vanished_train_is_re_pointed_rather_than_dropped(w, feed):
+    """The 9.6% case. After the debounce the plan follows the next real train."""
+    eta = feed.now + 1200
+    later = eta + HEADWAY                      # one headway on: flap or no-show?
+    arm(feed, eta, vehicle="G-10065")
+    feed.rows = [row(later, vehicle="G-10199")]
+    for _ in range(watch.MISS_TICKS):
+        feed.now += watch.TICK
+        w.tick()
+
+    p = watch.load()
+    assert p["committed"] is not None, "silence is not a statement; do not drop it"
+    assert p["committed"]["target_eta"] == later
+    assert feed.titles == ["Your train may be running late"]
+    assert "Show options" in [a["label"] for a in feed.sent[0]["actions"]]
+
+    feed.now += watch.TICK                     # and it keeps tracking from there
+    feed.rows = [row(later, vehicle="G-10199")]
+    w.tick()
+    assert watch.load()["committed"]["misses"] == 0
+
+
+def test_the_debounce_rides_out_a_flap_without_saying_anything(w, feed):
+    """MISS_TICKS * TICK is 240 s against a measured 90 s flap. Nothing is said."""
+    eta = feed.now + 1200
+    arm(feed, eta, vehicle="G-10065")
+    for _ in range(watch.MISS_TICKS - 1):
+        feed.now += watch.TICK
+        feed.rows = []
+        w.tick()
+    feed.now += watch.TICK
+    feed.rows = [row(eta, vehicle="G-10065")]  # back, as a flap comes back
+    w.tick()
+    assert feed.titles == []
+    assert watch.load()["committed"]["misses"] == 0
+
+
+def test_nothing_left_to_follow_drops_the_commitment_and_says_so(w, feed):
+    """The one honest case for dropping it -- and it still owes an explanation."""
+    eta = feed.now + 1200
+    arm(feed, eta, vehicle="G-10065")
+    for _ in range(watch.MISS_TICKS):
+        feed.now += watch.TICK
+        feed.rows = []
+        w.tick()
+    p = watch.load()
+    assert p["committed"] is None
+    assert feed.titles == ["That train vanished"]
+
+
+def test_a_skipped_train_is_never_adopted(w, feed):
+    """Adopting one would point the plan at a train that passes the platform."""
+    eta = feed.now + 1200
+    arm(feed, eta, vehicle="G-10065")
+    feed.rows = [row(eta + HEADWAY, vehicle="G-10199", skipped=True)]
+    for _ in range(watch.MISS_TICKS):
+        feed.now += watch.TICK
+        w.tick()
+    assert watch.load()["committed"] is None
+    assert feed.titles == ["That train vanished"]
+
+
+def test_a_stated_skip_does_not_wait_out_the_debounce(w, feed):
+    """MBTA said it. That is evidence, not silence, so act on the first tick."""
+    eta = feed.now + 1200
+    arm(feed, eta, vehicle="G-10065")
+    feed.rows = [row(eta, vehicle="G-10065", skipped=True)]
+    w.tick()
+    assert feed.titles == ["That train vanished"]
+    assert watch.load()["committed"] is None

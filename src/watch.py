@@ -190,7 +190,12 @@ class Watcher:
                 log(f"no match for {fmt(tgt)} ({miss}/{MISS_TICKS})")
                 save(p)
                 if miss >= MISS_TICKS:
-                    self._recover(p, rows, snap)
+                    # Silence is not a statement. The feed going quiet for 240 s is
+                    # a flap as often as a no-show, so the commitment is kept and
+                    # re-pointed rather than dropped -- _recover is for the cases
+                    # where something was actually said (a skip) or there is
+                    # genuinely nothing left to point at.
+                    self._uncertain(p, rows, snap)
                 return
             com["misses"] = 0
             com["target_eta"] = row["eta"]
@@ -262,15 +267,20 @@ class Watcher:
         like a no-show, and dropping it silently is worse than following the wrong
         train loudly. Revisions keep flowing, so a train that comes back gets
         announced right after.
+
+        The wording asks rather than asserts -- "may be running late" -- because
+        only a vehicle id could tell these apart and a vanished train has none.
         """
         com = p["committed"]
-        cand = [r for r in rows if r["eta"] > snap["t"] + p["walk"] * 0.5]
+        # A train MBTA has said is not stopping here is not a candidate, however
+        # well its time fits: adopting one would point the plan at a train that
+        # will pass through the platform.
+        cand = [r for r in rows if r["eta"] > snap["t"] + p["walk"] * 0.5
+                and not r.get("skipped")]
         if not cand:
-            if not p["fired"].get("recover"):
-                notify.send("No train predicted", "Nothing upstream for your deadline.",
-                            priority=5, tags=["warning"])
-                p["fired"]["recover"] = True
-                save(p)
+            # Nothing to follow. That is the one case where dropping the
+            # commitment is honest, and _recover is what says so with options.
+            self._recover(p, rows, snap)
             return
         row = min(cand, key=lambda r: abs(r["eta"] - com["target_eta"]))
         com["target_eta"] = row["eta"]
