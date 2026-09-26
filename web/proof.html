@@ -1,0 +1,29 @@
+<!doctype html><meta charset="utf-8"><title>static proof</title>
+<body style="font:14px system-ui;padding:16px">
+<h3>Static page, no backend</h3>
+<pre id="out">loading…</pre>
+<script>
+const MAGOUN_IN = "70508";
+(async () => {
+  const log = [];
+  try {
+    // 1. live data straight from MBTA, cross-origin, no key
+    const u = "https://api-v3.mbta.com/predictions?filter%5Bstop%5D=" + MAGOUN_IN
+            + "&filter%5Bdirection_id%5D=0&sort=arrival_time";
+    const r = await fetch(u);
+    const d = await r.json();
+    log.push("live predictions fetched cross-origin: " + d.data.length);
+    d.data.slice(0,3).forEach(p =>
+      log.push("   arr " + (p.attributes.arrival_time || "-")));
+
+    // 2. fitted stats served as a static asset alongside the page
+    const m = await (await fetch("model.json")).json();
+    const q = m.grid.indexOf(0.1);
+    log.push("model.json loaded: " + m.n_legs + " legs, " + m.days + " days");
+    log.push("   berth rule q10 = " + Math.round(m.berth.q[q]) + "s");
+    log.push("   headway median = " + (m.headway_median_s/60).toFixed(1) + " min");
+    log.push("VERDICT: a static page can do live + stats with no server.");
+  } catch (e) { log.push("FAILED: " + e); }
+  document.getElementById("out").textContent = log.join("\n");
+})();
+</script>

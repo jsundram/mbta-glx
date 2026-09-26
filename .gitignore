@@ -14,3 +14,4 @@ __pycache__/
 .DS_Store
 ops/ntfy.env
 data/plan.json
+web/model.json

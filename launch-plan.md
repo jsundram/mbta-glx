@@ -504,6 +504,74 @@ Built as a debugging surface as much as a product: the failure modes in this
 project are all *temporal*, and watching predictions move in real time makes them
 obvious in a way that reading logs after the fact does not.
 
+## Deploy architecture
+
+Verified 2026-09-25, not assumed:
+
+| endpoint | CORS | usable from a browser? |
+|---|---|---|
+| `api-v3.mbta.com` (predictions, vehicles, alerts, schedules) | `access-control-allow-origin: *` | **yes** |
+| `cdn.mbta.com/realtime/*.pb` (TripUpdates, Alerts) | none | **no** — server only |
+
+A throwaway static page (`web/proof.html`) fetched live predictions cross-origin
+*and* loaded `model.json` as a sibling asset, with no server involved. So the
+split the rider asked for is real:
+
+```
+  static site  ──fetch──>  api-v3.mbta.com        (live, CORS, no key needed)
+   (Pages/CDN) ──fetch──>  model.json, stats.json (published by the backend)
+                ──fetch──>  live-extras.json      (the one thing browsers cannot get)
+
+  backend (small, always-on)
+     record_rt.py    continuous capture  ──>  data/live, data/pairs
+     daily.sh        rollup + fit        ──>  publishes model.json / stats.json
+     skips publisher every ~30 s         ──>  live-extras.json
+     watch.py        the notifier (needs always-on scheduling)
+```
+
+### What has to stay server-side, and why
+
+1. **The protobuf feeds.** No CORS, and they carry the `SKIPPED` / `CANCELED`
+   markers that the v3 JSON API drops. The backend publishes a small
+   `live-extras.json` (a list of skipped trip ids) every ~30 s.
+2. **The archive.** History is the point; a browser cannot accumulate it.
+3. **The notifier trigger.** Must fire at a wall-clock instant whether or not any
+   page is open. macOS sleeping is exactly why the Mac cannot be the final host.
+
+### Hosting
+
+| piece | where | cost |
+|---|---|---|
+| static board | GitHub Pages / Cloudflare Pages | £0 |
+| model.json / stats.json | committed artifacts, published by CI | £0 |
+| daily rollup + refit | GitHub Actions cron (daily granularity is fine) | £0 |
+| archiver + skips + notifier | Raspberry Pi, or fly.io / small VPS | £0–5/mo |
+
+GitHub Actions is fine for the *daily* work and useless for the trigger: 5-minute
+granularity, routinely 5–15 minutes late.
+
+### The fork worth deciding before building
+
+Going fully static means **the tier logic runs in the browser**, so it exists twice:
+Python for fitting, backtesting and `simulate.py`; JavaScript for the live page.
+That is a genuine divergence risk — the two could disagree and only the Python one
+is tested.
+
+Mitigation, and the reason it is still the right call: keep the **model as data**.
+`model.json` already holds every fitted quantile, so the JavaScript does lookup and
+arithmetic (~80 lines), not modelling. Anything that fits, simulates or scores stays
+in Python and never ships to the browser.
+
+The alternative — a thin backend serving `/status`, frontend stays dumb — is less
+work today and gives up the static property the rider asked for. Not recommended,
+but it is the fallback if the JS port starts growing.
+
+- [ ] Port the tier selection to JS (lookup + arithmetic only, driven by model.json)
+- [ ] Backend publisher for `live-extras.json` (skips) every ~30 s
+- [ ] GitHub Actions: daily rollup, refit, commit `model.json` + `stats.json`
+- [ ] Pick the always-on host (Pi vs fly.io) — still the open Phase 5 decision
+- [ ] A contract test that the JS and Python tier logic agree on the same inputs
+
 ## Phase 5 — Delivery
 
 ### Start on this Mac, move to cloud later — yes, if we hold one line
