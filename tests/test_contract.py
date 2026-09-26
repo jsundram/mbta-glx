@@ -188,6 +188,20 @@ needs_node = pytest.mark.skipif(_node() is None or not FIXTURES,
                                 reason="node or fixtures unavailable")
 
 
+def test_the_javascript_side_actually_runs_here():
+    """A skipped parity test and a passing one look identical in a green log.
+
+    Locally node is optional. In CI it is the whole point: without it the suite goes
+    green having compared nothing, which is exactly the "test goes quiet" failure
+    described above. So CI is required to have node, and to have fixtures to run.
+    """
+    if not os.environ.get("CI"):
+        pytest.skip("local run; node is optional here")
+    assert _node() is not None, \
+        "node is missing in CI: the JavaScript port is not being compared to anything"
+    assert FIXTURES, "no fixtures in CI: the contract test is pinning nothing"
+
+
 @needs_node
 @pytest.mark.parametrize("case", list(_cases()))
 def test_javascript_port_matches_python(case, request):

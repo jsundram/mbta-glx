@@ -1,10 +1,15 @@
-"""Drive web/board.html in a real browser, from file://, with no server running.
+"""Drive web/board.html in a real browser: from file://, and over HTTP.
 
 The contract test proves the JS computes the same rows as Python. It says nothing
 about whether the page loads at all, and two things here were wrong until measured:
 a board opened as file:// cannot fetch a sibling file (hence web/model.js), and the
 whole point of leaving a tablet open is the alert re-arming, which only the browser
 does. So this replays a fixture as if it were happening now and watches the page.
+
+Both shapes are covered because they differ. From file:// no sibling file can be
+fetched, so the model arrives as a script and the self-score panel hides itself.
+Over HTTP -- which is what Pages serves -- stats.json is reachable and the panel is
+populated; that half is the only check on the published self-score.
 
 Not collected by pytest on purpose: it needs playwright, a browser and ~90 s.
 
@@ -98,6 +103,63 @@ def dwell_scenario(browser, check) -> None:
     check("the hero is marked as boardable now",
           "here" in page.eval_on_selector("#hero", "e => e.className"))
     page.close()
+
+
+def served_scenario(browser, check) -> None:
+    """The same page over HTTP, which is the only place the self-score can appear.
+
+    A board opened as file:// cannot fetch a sibling file at all, so stats.json is
+    unreachable there and the panel hides itself -- by design, and verified below.
+    Pages serves web/ over HTTP, so this is the deployed shape: the one where
+    stats.json is fetched and the panel is populated. Nothing else in this file
+    covers it, because until M3 there was no stats.json to fetch.
+    """
+    import functools
+    import http.server
+    import socketserver
+    import threading
+
+    stats = json.loads((ROOT / "web" / "stats.json").read_text())
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler,
+                                directory=str(ROOT / "web"))
+    # Quiet: the request log would bury the checks.
+    handler.log_message = lambda *a, **k: None
+    with socketserver.TCPServer(("127.0.0.1", 0), handler) as httpd:
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        port = httpd.server_address[1]
+        fixture = sorted((ROOT / "tests" / "fixtures").glob("cases-*.json"))[0]
+        case = json.loads(fixture.read_text())[0]
+        live = shifted(case, time.time() - case["now"] + 30)
+
+        page = browser.new_page()
+        stub(page, live)
+        page.route(re.compile(r"ntfy\.sh"), lambda r: r.fulfill(status=200, json={}))
+        page.goto(f"http://127.0.0.1:{port}/board.html")
+        page.wait_for_timeout(5000)
+
+        print(f"\n  serving web/ over HTTP on {port} (the deployed shape)")
+        check("the self-score panel is shown when stats.json is reachable",
+              not page.is_hidden("#hist"))
+        score = page.inner_text("#histScore")
+        print(f"  score: {score}")
+        check("it reports the real caught count",
+              f"caught {stats['caught']}/{stats['of']}" in score, score)
+        check("platform wait is shown in minutes",
+              f"{stats['mean_platform_wait_s'] / 60:.1f} min" in score)
+        # Platform wait alone rewards dawdling, so the board has to show both.
+        check("door-to-train is shown beside it",
+              "door-to-train" in score
+              and f"{stats['mean_door_to_train_s'] / 60:.1f} min" in score)
+        check("the window it scored is named",
+              f"{stats['window_days']}d to {stats['as_of']}" in score)
+        rows = page.inner_text("#histRows")
+        check("every lead bin is rendered",
+              all(b["bin"] in rows for b in stats["by_lead"]),
+              f"{len(stats['by_lead'])} bins")
+        check("a bin shows its sample size and its p50",
+              f"n={stats['by_lead'][0]['n']}" in rows and "p50" in rows)
+        page.close()
+        httpd.shutdown()
 
 
 def _case_stopped_at_magoun():
@@ -205,14 +267,20 @@ def run(case_index: int, headed: bool) -> int:
             check("it re-arms about once a minute", 55 <= gap <= 90, f"{gap:.0f}s apart")
         check("the alert stays armed in the footer",
               "alert armed" in page.inner_text("#foot"))
+        # The documented degradation: from file:// stats.json cannot be fetched at
+        # all, so the panel hides rather than showing an empty box.
+        check("the self-score panel hides itself from file://",
+              page.is_hidden("#hist"))
         dwell_scenario(browser, check)
+        served_scenario(browser, check)
         browser.close()
 
     print()
     if failures:
         print(f"FAILED: {len(failures)} check(s): {', '.join(failures)}")
         return 1
-    print("all checks passed: the static board runs from file:// with no backend")
+    print("all checks passed: the board runs from file:// with no backend, "
+          "and serves its self-score over HTTP")
     return 0
 
 

@@ -1,0 +1,59 @@
+# Serve web/ as the static origin.
+#
+# web/ is uploaded as-is, so there is no docs/ copy of board.html or app.js to fall
+# behind. The artifacts it serves -- model.json, model.js, stats.json -- are written
+# by fit.py and stats.py on the capture host and committed from there; this only
+# deploys what is in the commit.
+#
+# publish.py --check runs first and fails the deploy on an incomplete origin. That is
+# the point of the gate: a refit that published data/model.json and forgot
+# web/model.js would otherwise deploy a board predicting from the previous rating
+# with nothing on screen to say so.
+#
+# Requires, once, in the repository settings: Pages -> Build and deployment ->
+# Source -> GitHub Actions. No secrets.
+name: pages
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "web/**"
+      - "data/model.json"
+      - "data/stats.json"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# A newer publish supersedes one still deploying, but never cancels it half-done.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.13
+
+      - name: refuse to deploy a partial origin
+        run: uv run python src/publish.py --check
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+      - id: deploy
+        uses: actions/deploy-pages@v4

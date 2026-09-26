@@ -1,0 +1,62 @@
+# Watch for the schedule rating change, and open an issue when it lands.
+#
+# A rating change resets every schedule-dependent constant at once. The next one is
+# 2026-12-12, which is `feed_end_date` on the feed MBTA is serving now -- not a date
+# anybody typed in. src/rating.py explains why the identity watched is
+# (season, version, feed_end_date) and not feed_start_date, which moves on every
+# republish.
+#
+# This only detects. The refit reads data/raw and data/magoun.parquet, which are
+# gitignored and live on the capture host, so the refit runs there: ./src/refit.sh,
+# then deliberately ./src/refit.sh --fixtures with the row diff read, then
+# rating.py --record in the same commit.
+#
+# GITHUB_TOKEN is the built-in token. No secret to add.
+name: rating
+
+on:
+  schedule:
+    - cron: "23 12 * * 2"       # Tuesdays, after MBTA's usual republish window
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.13
+
+      - id: rating
+        name: has the rating moved?
+        run: |
+          # Not `... | tee`: $? would be tee's status, which is always 0, and the
+          # issue would never be opened.
+          set +e
+          uv run python src/rating.py --check > rating.txt 2>&1
+          code=$?
+          set -e
+          cat rating.txt
+          echo "moved=$code" >> "$GITHUB_OUTPUT"
+
+      - name: open an issue if it has
+        if: steps.rating.outputs.moved != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # One open issue per rating, not one per week: reuse the existing one.
+          existing=$(gh issue list --state open --label rating --json number \
+            --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file rating.txt
+            exit 0
+          fi
+          gh label create rating --description "schedule rating change" --force
+          gh issue create --label rating \
+            --title "Schedule rating changed: refit needed" \
+            --body-file rating.txt

@@ -1,12 +1,31 @@
 #!/bin/bash
 # Daily maintenance: capture today's schedule before it expires, distil finished
-# archives into pairs, drop raw archives we no longer need.
+# archives into pairs, score the closed days, drop raw archives we no longer need.
+#
+# This runs on the capture host because everything it reads -- data/live, data/pairs,
+# data/sched_full -- is gitignored and lives here, not in the repo. The GitHub
+# workflows duplicate only the suite, which is the part that needs no archive.
+#
+# It does not commit or push. publish.py --commit is a deliberate step: see the
+# reminder at the end.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 echo "=== $(date -Iseconds) daily ==="
 uv run --quiet python src/snapshot_schedule.py
 uv run --quiet --with polars python src/rollup.py --compact --prune 90
+# Scores any closed day not already in data/scores.jsonl, then republishes the
+# window. The scoreboard is why the panel keeps its history after the prune above
+# deletes the archives it was computed from.
+uv run --quiet --with polars --with numpy python src/stats.py
 echo "--- regression tests ---"
 uv run --quiet --with pytest --with numpy --with polars python -m pytest tests/ -q
+echo "--- static origin ---"
+uv run --quiet python src/publish.py --check
+if [ -n "$(git status --porcelain web data/stats.json data/scores.jsonl)" ]; then
+  echo
+  echo "the origin has moved since the last publish:"
+  git status --short web data/stats.json data/scores.jsonl
+  echo "  uv run python src/publish.py --commit    # then push; Pages deploys web/"
+fi
 echo "=== done ==="

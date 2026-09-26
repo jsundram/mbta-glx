@@ -1,0 +1,53 @@
+# The suite, on every push and once a week.
+#
+# The weekly run is the drift check. Nothing in the repo changes between runs, so a
+# failure is the outside world moving: a new node release whose arithmetic disagrees
+# with Python's, a polars upgrade that changes a quantile, a dependency that stopped
+# resolving. That is worth knowing about before a rating change makes it urgent.
+#
+# This deliberately duplicates src/daily.sh rather than introducing anything new --
+# the Mac already runs exactly this, node parity included.
+#
+# What is NOT here, and cannot be: the daily rollup, the scoring, and the refit.
+# They read data/live, data/pairs and data/raw, which are gitignored because they
+# are large and churn daily. The archive lives on the capture host, so those run
+# there (src/daily.sh, src/refit.sh). A workflow cannot roll up an archive it has
+# never seen.
+name: suite
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 11 * * 1"       # Mondays, 07:17 America/New_York in winter
+  workflow_dispatch:
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    env:
+      # tests/test_contract.py fails rather than skips when node is missing here.
+      # A skipped parity test and a passing one are indistinguishable in a green
+      # log, and the JavaScript port is the half with no other coverage.
+      CI: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.13
+
+      - name: suite, node parity included
+        run: >
+          uv run --with pytest --with numpy --with polars
+          python -m pytest tests/ -q
+
+      - name: the published set is complete and current
+        run: uv run python src/publish.py --check
+
+      # tests/board_smoke.py is not collected by pytest: it drives the real page in
+      # a browser, takes ~90 s and needs a pinned playwright with cached browsers.
+      # It stays a local check.
