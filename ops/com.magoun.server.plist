@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The backend HTTP service, for M4's /skips route.
+
+     Without this the board fetches its skip set from a port nobody is listening
+     on and degrades to an empty one -- which is the designed failure, so it fails
+     quietly and looks exactly like a day with no skipped trains.
+
+     Bound to 127.0.0.1 by server.py. `tailscale serve` is what makes it reachable
+     from the rider's phone, terminating TLS on the tailnet and proxying here.
+     No secrets: everything this serves is public transit data. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.magoun.server</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/uv</string>
+    <string>run</string><string>--quiet</string>
+    <string>--with</string><string>polars</string>
+    <string>--with</string><string>gtfs-realtime-bindings</string>
+    <string>python</string><string>src/server.py</string><string>8723</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/jsundram/Dropbox/Code/mbta-glx</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key><string>/Users/jsundram/Dropbox/Code/mbta-glx/data/live/server.out</string>
+  <key>StandardErrorPath</key><string>/Users/jsundram/Dropbox/Code/mbta-glx/data/live/server.err</string>
+</dict>
+</plist>

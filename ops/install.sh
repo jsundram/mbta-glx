@@ -28,7 +28,7 @@ fi
 cd "$(dirname "$0")"
 mkdir -p "$HOME/Library/LaunchAgents"
 fail=0
-for p in com.magoun.archiver com.magoun.daily com.magoun.watch; do
+for p in com.magoun.archiver com.magoun.daily com.magoun.watch com.magoun.server; do
   if [ "$p" = com.magoun.watch ] && [ ! -f ntfy.env ]; then
     echo "skip  $p  (ops/ntfy.env not set up yet)"
     continue
