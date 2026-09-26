@@ -416,10 +416,28 @@ class Watcher:
 
     # ---- commands from the phone ----
     def on_command(self, text: str, _raw: dict) -> None:
+        """Handle one tap, or one handoff from the board.
+
+        This runs on the ntfy subscription thread while `tick` runs on the main
+        one, and both read-modify-write plan.json. Taking the lock only for the
+        load left a window where a tick that started first would save over the tap
+        -- "On my way" lost that way costs the mid-walk adjust, which is one of the
+        three things this file exists to send. So the whole handler holds it.
+
+        Nothing is allowed to escape, either: an exception here would propagate out
+        of notify.watch_commands and kill the subscription thread, and the notifier
+        would go on ticking with every button on the phone silently dead.
+        """
         log(f"command: {text!r}")
-        cmd, *rest = text.split()
-        with self.lock:
-            p = load()
+        try:
+            with self.lock:
+                self._dispatch(text)
+        except Exception as e:  # noqa: BLE001
+            log(f"  (command {text!r} failed: {type(e).__name__}: {e})")
+
+    def _dispatch(self, text: str) -> None:
+        cmd, *rest = text.split() or [""]
+        p = load()
         if cmd == "arm" and rest:
             # From the board's bell: `arm <eta epoch> [vehicle]`. An epoch, not a
             # clock time, so there is no zone to get wrong on either side.

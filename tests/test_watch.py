@@ -14,6 +14,7 @@ debounce and the decision to fire are the real code.
 """
 import os
 import pathlib
+import threading
 import sys
 import time
 
@@ -354,3 +355,96 @@ def test_arming_a_different_train_starts_over(w, feed):
     assert p["committed"]["target_eta"] == later
     assert p["committed"]["vehicle"] == "G-10199"
     assert p["fired"] == {}, "a different train has not been left for"
+
+
+# --- the command thread and the tick thread both write plan.json ---
+
+def test_a_tap_arriving_mid_tick_is_not_overwritten(w, feed, monkeypatch):
+    """`On my way` is what unlocks the mid-walk adjust. Losing it loses that push.
+
+    The tap arrives on the ntfy subscription thread while a tick is in flight on
+    the main one. Holding the lock only across `load()` left the tick free to save
+    its own copy over the tap.
+    """
+    eta = feed.now + 1200
+    arm(feed, eta, vehicle="G-10065")
+    feed.rows = [row(eta, vehicle="G-10065")]
+
+    threads = []
+
+    def tap_during(snap, *a, **k):
+        # The tick is inside the lock here. Give the tap every chance to land
+        # first: unlocked, it completes, and then the tick saves over it.
+        t = threading.Thread(target=w.on_command, args=("left", {}))
+        t.start()
+        t.join(timeout=0.5)
+        threads.append(t)
+        return list(feed.rows)
+
+    monkeypatch.setattr(watch.service, "etas", tap_during)
+    w.tick()
+    threads[0].join(timeout=2)
+    assert watch.load()["left_at"] is not None, "the tick saved over the tap"
+
+
+def test_a_bad_command_does_not_kill_the_button_thread(w, feed):
+    """An exception here escapes into notify.watch_commands and ends the
+    subscription -- the notifier keeps ticking with every button silently dead."""
+    eta = feed.now + 1200
+    arm(feed, eta)
+    for junk in ("pick zero", "pick 99", "", "arm", "nonsense", "pick"):
+        w.on_command(junk, {})
+    w.on_command("left", {})
+    assert watch.load()["left_at"] is not None, "the handler stopped working"
+
+
+# --- the mid-walk adjust: launch-plan.md's "start jogging / ease up" ---
+
+def test_the_adjust_fires_once_the_train_is_moving_and_sharp(w, feed):
+    """Only from the two tiers with a tight band -- +/-33 s and +/-7 s."""
+    walk = 390
+    eta = feed.now + 300
+    arm(feed, eta, vehicle="G-10065", walk=walk, fired={"leave": True})
+    watch.save({**watch.load(), "left_at": feed.now - 120})
+
+    feed.rows = [row(eta, vehicle="G-10065", source="mbta", band=75)]
+    w.tick()
+    assert feed.titles == [], "an mbta row at +/-75 s is not sharp enough to jog on"
+
+    feed.rows = [row(eta, vehicle="G-10065", source="departed Ball Sq", band=7)]
+    w.tick()
+    assert len(feed.sent) == 1
+    assert "min to your train" in feed.sent[0]["title"]
+    assert "s of slack" in feed.sent[0]["message"]
+
+    feed.rows = [row(eta, vehicle="G-10065", source="departed Ball Sq", band=7)]
+    w.tick()
+    assert len(feed.sent) == 1, "the adjust fires once, not every tick"
+
+
+def test_the_adjust_says_which_way_to_lean(w, feed):
+    """A countdown, not prose: the verb has to change with the slack."""
+    walk = 390
+    said = {}
+    for label, left_ago, offset in (("fine", 120, 400), ("hurry", 120, 150)):
+        feed.sent.clear()
+        eta = feed.now + offset
+        arm(feed, eta, vehicle="G-10065", walk=walk, fired={"leave": True})
+        watch.save({**watch.load(), "left_at": feed.now - left_ago})
+        feed.rows = [row(eta, vehicle="G-10065", source="departed Medford/Tufts",
+                         band=33)]
+        w.tick()
+        said[label] = feed.sent[0]["message"] if feed.sent else ""
+    assert "you're fine" in said["fine"], said["fine"]
+    assert ("pick it up" in said["hurry"] or "you'll miss it" in said["hurry"]), \
+        said["hurry"]
+
+
+def test_no_adjust_until_the_rider_says_they_left(w, feed):
+    """Without a reference point the slack is invented. A missed nudge beats a
+    wrong one -- launch-plan.md's resolved decision on how it knows you left."""
+    eta = feed.now + 300
+    arm(feed, eta, vehicle="G-10065", fired={"leave": True})
+    feed.rows = [row(eta, vehicle="G-10065", source="departed Ball Sq", band=7)]
+    w.tick()
+    assert feed.titles == []
