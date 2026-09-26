@@ -94,6 +94,10 @@ the leave time.
   "by_lead": [{"bin": "5-10min", "n": 104, "p10": -61, "p50": -39, "p90": 78}] }
 ```
 
+`web/board.html` reads these field names directly and hides its panel when the file
+is absent or unparseable — so a missing `stats.json` degrades quietly, but a
+*renamed* field shows an empty panel instead of failing. Keep the names.
+
 ### `data/pairs/*.parquet` — the long-term store
 
 `(day, stop, dir, route, veh, trip, made_at, pred_arr, actual_arr, lead_s, err_s,
@@ -207,7 +211,12 @@ left open keeps re-arming an alert, and both implementations agree on every
 fixture. All three verified.
 
 ### M3 — Publish pipeline
-- `publish.py` writes `model.json` + `stats.json` to the Pages repo.
+- `publish.py` writes `model.json`, `model.js` and `stats.json` to the Pages repo.
+  **All three**: a refit produces `data/model.json`, `web/model.json` and
+  `web/model.js` (the `file://` fallback), and a publisher that carries only the
+  first leaves the board predicting from the previous rating with nothing to show
+  it. `fit.py` already writes all three; `tests/test_contract.py` fails if the web
+  copies fall behind, so the publisher's job is to move them, not to derive them.
 - GitHub Actions: daily rollup, weekly drift check, refit on rating change.
 
 **Done when:** the static board is serving artifacts nobody copied by hand.
