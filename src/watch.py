@@ -196,6 +196,7 @@ class Watcher:
             com["target_eta"] = row["eta"]
             if row.get("vehicle"):
                 com["vehicle"] = row["vehicle"]
+            now = snap["t"]
             # Keep the rider current: any material ETA move gets announced, both
             # ways, for as long as it keeps moving.
             slip = row["eta"] - com.get("original_eta", row["eta"])
@@ -205,7 +206,6 @@ class Watcher:
                 self._announce(p, row, now, "Your train is running late")
 
             leave_by = row["lo"] - p["walk"]
-            now = snap["t"]
             if not p["fired"].get("leave") and now >= leave_by - TICK / 2:
                 o = self._detail(p, snap, b, row)
                 extra = (f"\ncatch {o['p_catch']:.0%} · on time {o['p_ontime']:.0%}"
