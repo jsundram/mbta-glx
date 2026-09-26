@@ -464,7 +464,7 @@ Still unexercised live: a **skip** (protobuf-only, ~10/day system-wide) and a
 | always-on host | iPad kiosk · Raspberry Pi · fly.io / VPS | **Deferred, not closed** — M5 ships on this Mac, see below. |
 | archive retention | prune 90d · keep forever | compaction makes a full year ~0.46 GB; keeping everything is now affordable |
 | `data/live` location | inside Dropbox · outside | appended every 15 s; moving it out removes constant sync churn |
-| git remote | none yet | M3's workflows are committed but have never run. Needs a remote, a push, and Pages → Source → GitHub Actions. |
+| ~~git remote~~ | **done** | github.com/jsundram/mbta-glx, public. Pages deploys from Actions; suite, pages and rating have all run green. |
 
 ### Deferred: M5 ships on this Mac, and the gap is made visible instead
 

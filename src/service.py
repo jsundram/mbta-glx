@@ -232,7 +232,12 @@ def _iso(s: str | None) -> float | None:
     return dt.datetime.fromisoformat(s).timestamp() if s else None
 
 
-_SKIP_CACHE: dict = {"t": 0.0, "trips": set()}
+# `t` advances only on success, so it is also the answer to "how old is this set".
+# `fail_t` is separate and exists because without it a dead upstream means every
+# single call pays a fresh 20 s timeout: the ttl shortcut below is keyed on the
+# SUCCESS time, which stops moving exactly when the fetches start failing.
+_SKIP_CACHE: dict = {"t": 0.0, "trips": set(), "fail_t": 0.0}
+SKIP_FAIL_BACKOFF = 30.0
 
 
 def skipped_trips(stop: str = MAGOUN_IN, ttl: float = 30.0) -> set[str]:
@@ -246,6 +251,12 @@ def skipped_trips(stop: str = MAGOUN_IN, ttl: float = 30.0) -> set[str]:
     """
     now = time.time()
     if now - _SKIP_CACHE["t"] < ttl:
+        return _SKIP_CACHE["trips"]
+    # Back off after a failure. server.py runs single-threaded HTTPServer, so
+    # without this a cdn.mbta.com outage serialises a 20 s urlopen per request
+    # and /board and /status stop answering too -- the skip set is reached from
+    # `etas`, not just from /skips, and the board polls every 10 s.
+    if now - _SKIP_CACHE["fail_t"] < SKIP_FAIL_BACKOFF:
         return _SKIP_CACHE["trips"]
     try:
         from google.transit import gtfs_realtime_pb2 as pb
@@ -267,8 +278,9 @@ def skipped_trips(stop: str = MAGOUN_IN, ttl: float = 30.0) -> set[str]:
             and any(su.stop_id == stop for su in e.trip_update.stop_time_update)
         }
     except Exception:  # noqa: BLE001 - absence of this must never break the ETAs
+        _SKIP_CACHE["fail_t"] = now
         return _SKIP_CACHE["trips"]
-    _SKIP_CACHE.update(t=now, trips=trips)
+    _SKIP_CACHE.update(t=now, trips=trips, fail_t=0.0)
     return trips
 
 

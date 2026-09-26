@@ -673,20 +673,23 @@ split the rider asked for is real:
 ```
   static site  ──fetch──>  api-v3.mbta.com        (live, CORS, no key needed)
    (Pages/CDN) ──fetch──>  model.json, stats.json (published by the backend)
-                ──fetch──>  live-extras.json      (the one thing browsers cannot get)
+                ──fetch──>  <extras_url>/skips    (the one thing browsers cannot get)
 
   backend (small, always-on)
      record_rt.py    continuous capture  ──>  data/live, data/pairs
      daily.sh        rollup + fit        ──>  publishes model.json / stats.json
-     skips publisher every ~30 s         ──>  live-extras.json
+     server.py  GET /skips               ──>  parsed from the protobuf feed
      watch.py        the notifier (needs always-on scheduling)
 ```
 
 ### What has to stay server-side, and why
 
 1. **The protobuf feeds.** No CORS, and they carry the `SKIPPED` / `CANCELED`
-   markers that the v3 JSON API drops. The backend publishes a small
-   `live-extras.json` (a list of skipped trip ids) every ~30 s.
+   markers that the v3 JSON API drops. The backend answers `GET /skips` with
+   `{as_of, trips, ttl_s}` — parsed, not relayed: the feed is ~1 MB and the answer
+   is ~10 trip ids for one stop. An endpoint rather than a published file (see
+   architecture.md §5), so there is nothing publishing on a loop; it answers from
+   `service.skipped_trips`' own 30 s cache.
 2. **The archive.** History is the point; a browser cannot accumulate it.
 3. **The notifier trigger.** Must fire at a wall-clock instant whether or not any
    page is open. macOS sleeping is exactly why the Mac cannot be the final host.
@@ -728,7 +731,9 @@ but it is the fallback if the JS port starts growing.
 - [x] **A contract test that the JS and Python tier logic agree.** 28 fixtures
       through both implementations, every field of every row compared; drift
       injection table in architecture.md §4.
-- [ ] Backend publisher for `live-extras.json` (skips) every ~30 s
+- [x] The skip set a browser cannot fetch. Not a publisher in the end: `GET
+      /skips` on `server.py`, served over Tailscale, with `extras_url` published
+      into `model.json`'s constants so moving it is a republish.
 - [x] **`stats.json`, and the publisher that moves it.** `src/stats.py` scores each
       closed day once and appends it to `data/scores.jsonl`, so the window outlives
       the 90-day prune of the archive it was computed from. Coverage comes from
@@ -756,8 +761,11 @@ but it is the fallback if the JS port starts growing.
       whether the walk still fits before sending anyone out. A lid close still
       stops it. See architecture.md section 5 for what moving would cost — the one
       real tie to this host is `brief.health` reading `data/live`.
-- [ ] Add a git remote. M3's three workflows are committed but have never run; Pages
-      also needs Source → GitHub Actions set once.
+- [x] Add a git remote. github.com/jsundram/mbta-glx, public; Pages deploys from
+      Actions and all three workflows have run green. Two traps found doing it: a
+      branch-creation push does not match a `paths:` filter, and GitHub does not
+      register a workflow that has never run, so `gh workflow run` 404s on a file
+      sitting on the default branch.
 - [ ] **A v3 sidecar for `revenue`.** Live serving already merges both feeds — v3
       for predictions and positions, protobuf for `SKIPPED`/`CANCELED`. The archive
       does not: GTFS-realtime's `VehiclePosition` has no revenue field, so no

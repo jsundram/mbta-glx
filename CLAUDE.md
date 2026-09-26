@@ -14,7 +14,11 @@ platform; that gap is the whole project.
 ## Commands
 
 ```bash
-uv run --with polars python src/server.py 8723   # /board, /status, /history, /api
+# /board, /status, /history, /api, /skips. gtfs-realtime-bindings is not optional:
+# without it /skips answers {"as_of": 0, "trips": []} forever, which at the board
+# is indistinguishable from a day with no skipped trains. Stop com.magoun.server
+# first, or this loses the port race and the agent crash-loops on 8723.
+uv run --with polars --with gtfs-realtime-bindings python src/server.py 8723
 ./src/watch.sh plan park 09:00                   # arm the notifier
 ./src/q.sh "SELECT ... FROM pairs"               # ad-hoc SQL over the archive
 uv run --with pytest --with numpy --with polars python -m pytest tests/ -q

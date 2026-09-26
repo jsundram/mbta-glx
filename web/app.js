@@ -356,8 +356,14 @@ function serviceDate(now) {
     year: "numeric", month: "2-digit", day: "2-digit"}).format(new Date(now * 1000));
 }
 
-async function getJSON(url) {
-  const r = await fetch(url, {cache: "no-store"});
+/** Every fetch here is cross-origin and none of them may hang the tick: the poll
+ *  loop awaits them in sequence and paints only afterwards, so one unanswered
+ *  socket stops the board rather than degrading it. A refused connection fails
+ *  instantly; a DROPPED one -- an asleep Mac, a phone off the tailnet -- does not,
+ *  and waits out the browser's connect timeout instead. */
+async function getJSON(url, timeoutMs) {
+  const r = await fetch(url, {cache: "no-store",
+                              signal: AbortSignal.timeout(timeoutMs || 8000)});
   if (!r.ok) throw new Error(`${r.status} ${url}`);
   return r.json();
 }
@@ -403,23 +409,41 @@ async function scheduleSlots(model, day) {
  *  these and cdn.mbta.com has no CORS, so the backend parses it and serves the
  *  answer at constants.extras_url.
  *
- *  Three ways this yields nothing, all of them the same to the rider and all of
+ *  Nothing here may block the board. The endpoint lives on a tailnet host, so
+ *  when the Mac is asleep or the phone is off the tailnet the connection is
+ *  dropped rather than refused -- a fetch with no timeout then hangs for tens of
+ *  seconds, every tick, and the board stops painting altogether. It used to be a
+ *  same-origin sibling file that 404'd instantly, which is why this was safe
+ *  before and is not now. So: a short timeout, and a backoff that stops a dead
+ *  host costing a stall on every poll.
+ *
+ *  The last good set is kept and reused until its own ttl runs out, so a single
+ *  missed poll does not blink the strikethrough off a train that is still
+ *  skipped. Four ways this yields nothing, all the same to the rider and all of
  *  them how the board behaved before skips existed: no endpoint published, the
- *  endpoint unreachable (an asleep Mac, off the tailnet), or a set older than its
- *  own ttl. The last one is the reason `as_of` is on the wire at all -- the
- *  backend keeps serving its previous set when the upstream fetch fails, so a
- *  healthy-looking 200 can carry a stale answer.
+ *  endpoint unreachable, the backoff still running with nothing cached, or a set
+ *  older than the ttl the backend quoted.
  *
  *  Read off constants directly rather than through need(): a board with no
  *  endpoint configured must lose the strikethrough, not the whole page. */
+const SKIP_TIMEOUT_MS = 2500;   // a quarter of a poll; it is one small GET
+const SKIP_BACKOFF_S = 60;      // after a failure, stop asking for a while
+let skipCache = {trips: new Set(), asOf: 0, ttl: 60, nextTry: 0};
+
 async function skippedTrips(now, model) {
   const url = (model.m.constants || {}).extras_url;
   if (!url) return new Set();
-  try {
-    const d = await getJSON(url);
-    if (!d.as_of || now - d.as_of > (d.ttl_s || 60)) return new Set();
-    return new Set(d.trips || []);
-  } catch (e) { return new Set(); }
+  if (now >= skipCache.nextTry) {
+    try {
+      const d = await getJSON(url, SKIP_TIMEOUT_MS);
+      skipCache = {trips: new Set(d.trips || []), asOf: d.as_of || 0,
+                   ttl: d.ttl_s || 60, nextTry: 0};
+    } catch (e) {
+      skipCache.nextTry = now + SKIP_BACKOFF_S;
+    }
+  }
+  if (!skipCache.asOf || now - skipCache.asOf > skipCache.ttl) return new Set();
+  return skipCache.trips;
 }
 
 async function fetchAlerts() {

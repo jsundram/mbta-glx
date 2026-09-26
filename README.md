@@ -12,7 +12,7 @@ error bars*, and sharpens them as trains move.
 ## Run it
 
 ```bash
-uv run --with polars python src/server.py 8723   # then open:
+uv run --with polars --with gtfs-realtime-bindings python src/server.py 8723
 #   http://localhost:8723/board       live status board, self-updating
 #   http://localhost:8723/?walk=6     ETAs with leave-by times
 uv run python src/service.py 6                   # one-shot CLI, 6-minute walk

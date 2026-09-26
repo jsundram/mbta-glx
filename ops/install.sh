@@ -3,6 +3,14 @@
 # NOT with sudo -- LaunchAgents live in your user's GUI domain and root has none.
 set -uo pipefail
 
+cd "$(dirname "$0")"
+# The agents are whatever plists are here. Two hand-kept lists is how
+# com.magoun.server ended up installed by one script and not removed by the
+# other. `--list` exists so a test can compare both scripts to the directory.
+AGENTS=()
+for f in com.magoun.*.plist; do AGENTS+=("${f%.plist}"); done
+if [ "${1:-}" = "--list" ]; then printf '%s\n' "${AGENTS[@]}"; exit 0; fi
+
 UID_N="$(id -u)"
 DOMAIN="gui/$UID_N"
 
@@ -25,10 +33,9 @@ if ! launchctl print "$DOMAIN" >/dev/null 2>&1; then
   exit 1
 fi
 
-cd "$(dirname "$0")"
 mkdir -p "$HOME/Library/LaunchAgents"
 fail=0
-for p in com.magoun.archiver com.magoun.daily com.magoun.watch com.magoun.server; do
+for p in "${AGENTS[@]}"; do
   if [ "$p" = com.magoun.watch ] && [ ! -f ntfy.env ]; then
     echo "skip  $p  (ops/ntfy.env not set up yet)"
     continue
