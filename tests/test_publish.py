@@ -47,9 +47,12 @@ def test_the_manifest_covers_every_asset_the_board_asks_for():
     """Two-sided: add a fetched asset without adding it here and this fails.
 
     An asset the board requests but the origin never publishes is a 404 the board
-    swallows -- stats.json hides its panel, model.js falls back, live-extras.json
-    degrades to an empty skip set. None of them fail loudly, so the completeness of
-    the origin cannot be checked in a browser.
+    swallows -- stats.json hides its panel and model.js falls back. Neither fails
+    loudly, so the completeness of the origin cannot be checked in a browser.
+
+    The skip set is no longer in this set at all: it is an absolute URL published
+    in model.json's constants, so it is another origin's problem and the filter
+    below drops it. tests/test_regressions.py is what polices that host.
     """
     src = (WEB / "board.html").read_text() + (WEB / "app.js").read_text()
     asked = set(re.findall(r'fetch\("([\w.-]+)"', src))
@@ -57,8 +60,6 @@ def test_the_manifest_covers_every_asset_the_board_asks_for():
     # Absolute URLs are other people's origins (api-v3.mbta.com, ntfy.sh).
     asked = {a for a in asked if not a.startswith("http")}
     published = {a.name for a in publish.MANIFEST}
-    # M4 has not shipped; the board already degrades when it is absent.
-    asked -= {"live-extras.json"}
     assert asked <= published, f"the board asks for unpublished assets: {sorted(asked - published)}"
 
 

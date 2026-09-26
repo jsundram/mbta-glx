@@ -18,7 +18,7 @@ shape of the system and the order of work.
 │    ├─ fetch  model.json               fitted quantiles     │
 │    ├─ <script> model.js               same bytes, file://  │
 │    ├─ fetch  stats.json               how it has been doing│
-│    ├─ fetch  live-extras.json         skips (no CORS path) │
+│    ├─ fetch  <extras_url>/skips       skips (no CORS path) │
 │    └─ POST   ntfy.sh                  arm its own alerts   │
 └────────────────────────────────────────────────────────────┘
         ▲ published artifacts              ▲ scheduled push
@@ -28,7 +28,7 @@ shape of the system and the order of work.
 │  fit.py         refit per rating    → model.json       │   │
 │  stats.py       score closed days   → stats.json       │   │
 │  publish.py     move artifacts to the static origin    │   │
-│  skips.py       live-extras.json every ~30 s           │   │
+│  server.py /skips  the skip set, parsed from protobuf  │   │
 │  watch.py       refine alerts, brief, recovery  ───────────┘
 └────────────────────────────────────────────────────────┘
 ```
@@ -82,11 +82,24 @@ single rule that keeps a JS frontend from becoming a second implementation.
 `lo` is the quantile the rider acts on. `eta` is the median. Never quote `eta` as
 the leave time.
 
-### `live-extras.json` — what the browser cannot fetch, every ~30 s
+### `GET /skips` — what the browser cannot fetch
 
 ```jsonc
-{ "t": 1790281459, "skipped_trips": ["77745376", ...], "ttl_s": 60 }
+{ "as_of": 1790281459, "trips": ["77745376", ...], "ttl_s": 60 }
 ```
+
+A **live endpoint**, not a published file — see §5. That is why the fields are
+named as they are. `as_of` is when the set was last *successfully* derived, which
+is not when it was served: `service.skipped_trips` hands back its previous set
+when cdn.mbta.com fails, so a healthy 200 can carry a stale answer and only this
+field separates "no skips" from "I cannot see skips". `0` means never fetched.
+The endpoint returns 200 with a stale set rather than 503 for the same reason — a
+503 collapses both cases into an empty set at the board.
+
+It is **not a proxy.** The feed is ~1 MB of protobuf and the answer is ~10 trip
+ids for one stop, so the parse happens here. And it is named for the one thing it
+serves rather than "extras": a bag invites a second thing in it, and the whole
+point of `BROWSER_ROUTES` is that there is never a second thing.
 
 ### `stats.json` — self-scoring, published daily
 
@@ -217,8 +230,8 @@ pre-existing cases are byte-identical.
   publishes `web/model.js` as well, the same bytes as a script, and `app.js` falls
   back to it. Without it the static board never got a model.
 - Live predictions and vehicles *do* fetch cross-origin from a `file://` page, so
-  only the sibling assets needed the fallback. `stats.json` and `live-extras.json`
-  degrade to a hidden panel and an empty skip set.
+  only the sibling assets needed the fallback. `stats.json` degrades to a hidden
+  panel, and the skip set to an empty one.
 
 `tests/board_smoke.py` drives the real page (playwright, MBTA and ntfy stubbed,
 ~90 s, not collected by pytest) and checks 18 properties of it, including the
@@ -321,9 +334,31 @@ one open item: the repo has no git remote yet, so the workflows are committed bu
 have never run. Add the remote, push, and set Pages → Build and deployment → Source
 → GitHub Actions.
 
-### M4 — `live-extras.json`
-- Small loop publishing skipped trips every ~30 s.
-- Board degrades cleanly when it is stale or missing (`ttl_s`).
+### M4 — the skip set — **transport done; the feature waits on a skip**
+
+Two halves, and only one of them can be finished on demand.
+
+**The transport, done.** `GET /skips` on `server.py` returns
+`{as_of, trips, ttl_s}` and nothing else, parsed from the protobuf feed rather
+than relayed. `data/config.json` holds `extras_url`, `fit.py` publishes it into
+`model.json`'s constants beside `walk_s`, and `app.js` reads it from there — so
+moving the endpoint is a republish, not a code change. Adding the constant was a
+one-field refit: 1 of 52 fields changed, the fit untouched.
+
+It stays bound to `127.0.0.1`. §5 called for "a bind beyond 127.0.0.1" on the
+assumption the rider's devices would reach it directly; they reach it through
+`tailscale serve`, which terminates TLS on the tailnet and proxies to loopback, so
+a wider bind buys nothing and costs the LAN an open port.
+
+`tests/test_server.py` boots the real handler on a real port: the shape, and the
+CORS gating checked against the allowlist for every route rather than the three
+anyone thought to name. Injecting CORS everywhere fails three of its tests; adding
+a field to the response fails another.
+
+**The feature, not yet.** Skips are ~10/day system-wide and rare at Magoun, and
+the marker lands ~2 min before the scheduled arrival. The row-level behaviour is
+already pinned — `make_fixtures` synthesises a skipped case precisely because
+sampling never catches one — but nobody has watched a real train struck through.
 
 **Done when:** a skipped train is struck through on the static board.
 
@@ -461,7 +496,7 @@ Lambda would mean giving up the tick loop and the ntfy subscription thread.
 
 ### Decided: M4 serves its endpoint off the Mac over Tailscale
 
-`live-extras.json` stops being a *published artifact* and becomes a **live endpoint**
+The skip set stops being a *published artifact* and becomes a **live endpoint**
 on the backend — a route on `server.py`, reachable from the rider's devices over
 Tailscale. `tailscale serve` supplies a real cert for `machine.tailnet.ts.net`, which
 matters because the board is served over HTTPS and a plain `http://` fetch would be
@@ -494,8 +529,11 @@ place, gated on `BROWSER_ROUTES` — an allowlist with a stated reason per entry
 the name. It also fails if any `web/` file *or* `model.json` constant names an
 unjustified host, and if the board calls a computed-rows route.
 
-Verified live, not just by grep: `/api` carries no CORS header, `/live-extras.json`
-does (404 until M4 builds it), `/nope` does not. The first version of the test was
+Verified live, and now automatically: `tests/test_server.py` boots the real
+handler on a real port and reads the headers off the wire — `/skips` carries the
+header, `/api` and `/nope` do not, and every route is checked against the
+allowlist rather than the three anyone thought to name. Injecting CORS everywhere
+fails three of its tests. The first version of the test was
 decoration — it checked only that the string `BROWSER_ROUTES` appeared somewhere,
 which the definition satisfied, so CORS on `/api` passed the whole suite.
 
@@ -506,10 +544,11 @@ own horizon — we relay it. A general transit app.
 
 ## 7. Sequencing note
 
-M1–M3 and M5 are done; **M4 is still open** and is now the only unbuilt milestone —
-`/live-extras.json` is allowlisted in `server.BROWSER_ROUTES` and named in
-`test_the_allowlist_only_names_routes_that_exist_or_are_planned` as planned, but
-there is no route, no `skips.py` and no `extras_url` constant. M5 did not need it.
+M1–M3 and M5 are done, and M4's transport with them; what is left of M4 is a real
+skipped train to look at. `BROWSER_ROUTES` no longer has a "planned" entry —
+every allowlisted route exists, and the test says so rather than carrying an
+exception. There is no `skips.py`: the endpoint answers from
+`service.skipped_trips`' own 30 s cache, so nothing needs to publish on a loop.
 Phase 1 calibration is gated on the works ending **2026-10-05**
 and a rating change on **2026-12-12** resets every schedule-dependent constant, so
 prefer shipping the structure now and re-fitting into it later.

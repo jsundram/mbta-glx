@@ -400,14 +400,25 @@ async function scheduleSlots(model, day) {
 }
 
 /** Trips MBTA has declared will not stop here. Only the protobuf feed carries
- *  these and it has no CORS, so the backend republishes them as live-extras.json
- *  (M4). Until that exists -- or whenever it is stale -- the set is empty, which
- *  is exactly how the board behaved before skips were wired in at all. */
-async function skippedTrips(now) {
+ *  these and cdn.mbta.com has no CORS, so the backend parses it and serves the
+ *  answer at constants.extras_url.
+ *
+ *  Three ways this yields nothing, all of them the same to the rider and all of
+ *  them how the board behaved before skips existed: no endpoint published, the
+ *  endpoint unreachable (an asleep Mac, off the tailnet), or a set older than its
+ *  own ttl. The last one is the reason `as_of` is on the wire at all -- the
+ *  backend keeps serving its previous set when the upstream fetch fails, so a
+ *  healthy-looking 200 can carry a stale answer.
+ *
+ *  Read off constants directly rather than through need(): a board with no
+ *  endpoint configured must lose the strikethrough, not the whole page. */
+async function skippedTrips(now, model) {
+  const url = (model.m.constants || {}).extras_url;
+  if (!url) return new Set();
   try {
-    const d = await getJSON("live-extras.json");
-    if (d.t && now - d.t > (d.ttl_s || 60)) return new Set();
-    return new Set(d.skipped_trips || []);
+    const d = await getJSON(url);
+    if (!d.as_of || now - d.as_of > (d.ttl_s || 60)) return new Set();
+    return new Set(d.trips || []);
   } catch (e) { return new Set(); }
 }
 
@@ -531,7 +542,7 @@ function start(onData, onError) {
       const here = arrivals.update(snap, model);
       const day = serviceDate(snap.t);
       const slots = await scheduleSlots(model, day);
-      const skipped = await skippedTrips(snap.t);
+      const skipped = await skippedTrips(snap.t, model);
       if (snap.t - lastAlerts > 120) {
         lastAlerts = snap.t;
         alerts = await fetchAlerts().catch(() => alerts);

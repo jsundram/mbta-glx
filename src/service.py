@@ -272,6 +272,20 @@ def skipped_trips(stop: str = MAGOUN_IN, ttl: float = 30.0) -> set[str]:
     return trips
 
 
+def skip_set(stop: str = MAGOUN_IN, ttl: float = 30.0) -> tuple[set[str], float]:
+    """The skip set, and when it was last successfully derived.
+
+    `skipped_trips` hands back the previous set when the protobuf fetch fails,
+    which is right for the ETAs -- absence of this must never break them -- but it
+    leaves a caller unable to tell a fresh empty set from a stale one. Anything
+    serving this onward has to know the difference: "no skips" and "I cannot see
+    skips" are different answers, and only the second one should make a board stop
+    striking trains through. 0.0 means never successfully fetched.
+    """
+    trips = skipped_trips(stop, ttl)
+    return trips, _SKIP_CACHE["t"]
+
+
 def schedule_today(day: dt.date) -> list[float]:
     cache = ROOT / "data" / "sched" / f"{day}.json"
     if cache.exists():

@@ -54,9 +54,16 @@ def _nearest_scheduled(t: float, slots: list[float]) -> float | None:
 # may only send Access-Control-Allow-Origin if it is listed here, with a reason.
 # tests/test_regressions.py enforces it. Adding a route here should feel deliberate.
 BROWSER_ROUTES = {
-    # M4, not yet implemented: {"t", "skipped_trips", "ttl_s"} and nothing more.
-    "/live-extras.json": "protobuf-only SKIPPED/CANCELED markers; cdn.mbta.com has no CORS",
+    # {"as_of", "trips", "ttl_s"} and nothing more. Named for the one thing it
+    # serves, not "extras": a bag invites a second thing in it, and the whole
+    # point of this allowlist is that there is never a second thing.
+    "/skips": "protobuf-only SKIPPED/CANCELED markers; cdn.mbta.com has no CORS",
 }
+
+# How long the board may trust a skip set. Two of service.skipped_trips' own 30 s
+# cache cycles: long enough that an ordinary miss does not blank the strikethrough,
+# short enough that a dead upstream stops being quoted as fact.
+SKIP_TTL_S = 60
 
 
 def _walk(query: str) -> int:
@@ -144,6 +151,22 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:  # noqa: BLE001
                 self._send(503, "application/json",
                            json.dumps({"error": str(e)}).encode())
+        elif u.path == "/skips":
+            # The one thing a browser physically cannot get: cdn.mbta.com serves
+            # the protobuf with no CORS. Parsed here rather than relayed -- the
+            # feed is ~1 MB and the answer is ~10 trip ids for one stop.
+            #
+            # 200 with a stale set and an honest `as_of`, never 503: the board can
+            # tell "no skips" from "cannot see skips" only if it is given the
+            # timestamp, and a 503 collapses both into an empty set.
+            try:
+                trips, as_of = service.skip_set()
+                self._send(200, "application/json", json.dumps({
+                    "as_of": as_of, "trips": sorted(trips),
+                    "ttl_s": SKIP_TTL_S}).encode())
+            except Exception as e:  # noqa: BLE001
+                self._send(503, "application/json",
+                           json.dumps({"error": str(e)}).encode())
         elif u.path == "/board":
             self._send(200, "text/html; charset=utf-8",
                        (ROOT / "src" / "status.html").read_bytes())
@@ -172,4 +195,10 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8723
     print(f"Magoun inbound ETA service on http://localhost:{port}/?walk=6")
+    # Still localhost only. architecture.md 5 called for "a bind beyond 127.0.0.1"
+    # because it assumed the rider's devices would reach this directly; they reach
+    # it through `tailscale serve`, which terminates TLS on the tailnet and proxies
+    # to loopback. So the wider bind buys nothing and costs the LAN an open port.
+    #
+    #   tailscale serve --bg --https 443 --set-path /skips http://127.0.0.1:8723/skips
     HTTPServer(("127.0.0.1", port), Handler).serve_forever()

@@ -341,6 +341,11 @@ WEB_DIR = ROOT_DIR / "web"
 ALLOWED_HOSTS = {
     "api-v3.mbta.com": "live predictions and vehicles; CORS-enabled, no key",
     "ntfy.sh": "the rider's own alert channel, armed by the page",
+    # M4. cdn.mbta.com serves the SKIPPED/CANCELED markers as protobuf with no
+    # CORS, so a browser cannot read them at all; this host parses that feed and
+    # serves the ~10 trip ids for one stop. Reachable only inside the tailnet, and
+    # the board degrades to an empty skip set whenever it is not.
+    "mini.tail8b0808.ts.net": "the skip set a browser cannot fetch; tailnet only",
 }
 
 
@@ -388,8 +393,10 @@ def test_the_cors_header_is_sent_from_one_place_gated_by_the_allowlist():
 def test_the_allowlist_only_names_routes_that_exist_or_are_planned():
     import server
     routes = set(re.findall(r'u\.path == "([^"]+)"', SERVER.read_text()))
-    planned = {"/live-extras.json"}          # M4
-    extra = set(server.BROWSER_ROUTES) - routes - planned
+    # Nothing is merely planned any more: M4 built /skips, so every allowlisted
+    # route must exist. An entry with no route behind it is the allowlist drifting
+    # back into decoration.
+    extra = set(server.BROWSER_ROUTES) - routes
     assert not extra, f"BROWSER_ROUTES names routes that do not exist: {sorted(extra)}"
 
 
