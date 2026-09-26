@@ -9,7 +9,10 @@ does. So this replays a fixture as if it were happening now and watches the page
 Not collected by pytest on purpose: it needs playwright, a browser and ~90 s.
 
     PLAYWRIGHT_BROWSERS_PATH=~/.cache/ms-playwright \\
-      uv run --with playwright python tests/board_smoke.py [--headed] [--case N]
+      uv run --with playwright==1.61.0 python tests/board_smoke.py [--headed] [--case N]
+
+The pin matters: playwright only drives the browser build it shipped with, and
+1.61.0 is the one matching the cached chromium-1228 / webkit-2311 on this Mac.
 """
 import argparse
 import datetime as dt
