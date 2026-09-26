@@ -40,10 +40,15 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv python install 3.13
 
+      # -rs names every skip in the log. Without it a skip is a number, and two
+      # very different runs produce the same one: locally node parity skips and
+      # the archive test runs; here it is the other way round, because data/pairs
+      # is gitignored. Both read "247 passed, 1 skipped", which is exactly the
+      # ambiguity invariant 9 is about.
       - name: suite, node parity included
         run: >
           uv run --with pytest --with numpy --with polars
-          python -m pytest tests/ -q
+          python -m pytest tests/ -q -rs
 
       - name: the published set is complete and current
         run: uv run python src/publish.py --check
