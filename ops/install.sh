@@ -36,8 +36,11 @@ fi
 mkdir -p "$HOME/Library/LaunchAgents"
 fail=0
 for p in "${AGENTS[@]}"; do
-  if [ "$p" = com.magoun.watch ] && [ ! -f ntfy.env ]; then
-    echo "skip  $p  (ops/ntfy.env not set up yet)"
+  # Either name: secrets.env is current, ntfy.env is what older installs have.
+  # Checking only the old one meant renaming the file skipped the notifier and
+  # said so in a line nobody reads twice.
+  if [ "$p" = com.magoun.watch ] && [ ! -f ntfy.env ] && [ ! -f secrets.env ]; then
+    echo "skip  $p  (no ops/secrets.env or ops/ntfy.env yet)"
     continue
   fi
   cp "$p.plist" "$HOME/Library/LaunchAgents/$p.plist"

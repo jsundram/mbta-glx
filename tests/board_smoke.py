@@ -193,6 +193,76 @@ def skip_scenario(browser, check) -> None:
     page2.close()
 
 
+def ratelimit_scenario(browser, check) -> None:
+    """Being rate-limited must be visible, fixable, and must not make it worse.
+
+    Found live: the board simply stopped updating. tick() calls snapshot() first
+    and getJSON throws on a 429, so it aborted before the skip and capture
+    fetches were even issued -- they looked unanswered when the fault was two
+    lines upstream. 20 requests/minute is per client IP and one board is about
+    12.5 of them, so a second device on the same wifi is enough to cause it.
+    """
+    fixture = sorted((ROOT / "tests" / "fixtures").glob("cases-*.json"))[0]
+    case = json.loads(fixture.read_text())[0]
+    live = shifted(case, time.time() - case["now"] + 30)
+
+    page = browser.new_page()
+    page.add_init_script(f"""localStorage.setItem("magoun.walk", "{WALK_S}");
+                             localStorage.removeItem("magoun.mbtakey");
+                             localStorage.removeItem("magoun.berths");""")
+    seen_keys, limited = [], {"on": True}
+
+    def v3(route):
+        u = route.request.url
+        seen_keys.append("api_key=" in u)
+        if limited["on"]:
+            return route.fulfill(status=429, content_type="application/json",
+                                 body='{"errors":[{"code":"rate_limited"}]}')
+        if "/predictions" in u:
+            return route.fulfill(json={"data": live["preds"]},
+                                 content_type="application/json")
+        if "/vehicles" in u:
+            return route.fulfill(json={"data": live["vehicles"]},
+                                 content_type="application/json")
+        if "/schedules" in u:
+            return route.fulfill(json=schedule_body(live["slots"]),
+                                 content_type="application/json")
+        return route.fulfill(json={"data": []}, content_type="application/json")
+
+    page.route(re.compile(r"api-v3\.mbta\.com"), v3)
+    page.route(re.compile(r"ntfy\.sh"), lambda r: r.fulfill(status=200, json={}))
+    page.goto(BOARD)
+    page.wait_for_timeout(5000)
+
+    print("\n  api-v3 answering 429")
+    foot = page.inner_text("#foot")
+    print(f"  foot: {foot[:110]}")
+    check("the board says it is being rate-limited, not just 'stale'",
+          "rate-limiting" in foot.lower(), foot[:90])
+    check("and offers somewhere to paste a key", not page.is_hidden("#keyask"))
+
+    # Hammering a limit you are already over keeps you over it.
+    before = len(seen_keys)
+    page.wait_for_timeout(12000)
+    check("it backs off instead of retrying every poll",
+          len(seen_keys) - before == 0,
+          f"{len(seen_keys) - before} more requests in 12 s at a 10 s poll")
+
+    limited["on"] = False
+    page.fill("#keyin", "smoke-test-key")
+    page.click("#keyask button")
+    page.wait_for_timeout(4000)
+    check("saving a key retries at once rather than serving out the backoff",
+          len(seen_keys) > before, f"{len(seen_keys) - before} requests after save")
+    check("and the key is actually sent", seen_keys and seen_keys[-1],
+          "no api_key= in the last request")
+    check("the warning clears once requests succeed",
+          page.is_hidden("#keyask")
+          and "rate-limiting" not in page.inner_text("#foot").lower(),
+          page.inner_text("#foot")[:90])
+    page.close()
+
+
 def capture_scenario(browser, check) -> None:
     """A dead archiver has to be visible, and an unreachable one must not look
     like a dead one.
@@ -527,6 +597,7 @@ def run(case_index: int, headed: bool) -> int:
         upgrade_scenario(browser, check)
         skip_scenario(browser, check)
         capture_scenario(browser, check)
+        ratelimit_scenario(browser, check)
         served_scenario(browser, check)
         browser.close()
 

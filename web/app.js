@@ -577,6 +577,10 @@ function buildStatus(now, snap, model, rows, berths, here, recent, line,
  */
 function start(onData, onError) {
   let model = null, alerts = [], stopped = false, lastError = null;
+  // v3's window is a minute, so a minute is the smallest useful wait; each
+  // further 429 adds another. Hammering a limit you are already over just keeps
+  // you over it, and the rider sees a board that never recovers.
+  let throttledUntil = 0, throttleStep = 0;
   const berthTracker = new BerthTracker(JSON.parse(store.get("magoun.berths", "{}")));
   const arrivals = new ArrivalTracker();
   let modelText = null, lastAlerts = 0, lastModelCheck = 0;
@@ -620,6 +624,7 @@ function start(onData, onError) {
 
   async function tick() {
     if (stopped) return;
+    if (Date.now() / 1000 < throttledUntil) return;
     try {
       const now = Date.now() / 1000;
       // Re-read the model occasionally so a refit reaches a tablet left running.
@@ -652,11 +657,19 @@ function start(onData, onError) {
                     arrivals.recent.slice(-5), lineMap(snap, model), alerts, slots),
         {capture: cap}));
       lastError = null;
+      throttleStep = 0;
+      throttledUntil = 0;
     } catch (e) {
       // 429 is not "the feed is down", it is "you are asking too often", and the
       // rider can do something about it. Without this the board simply stops
       // updating and goes stale with no clue why -- which is what it did.
-      lastError = /\b429\b/.test(String(e && e.message)) ? "ratelimit" : "error";
+      if (/\b429\b/.test(String(e && e.message))) {
+        lastError = "ratelimit";
+        throttleStep = Math.min(throttleStep + 1, 5);
+        throttledUntil = Date.now() / 1000 + 60 * throttleStep;
+      } else {
+        lastError = "error";
+      }
       if (onError) onError(e);
     }
   }
@@ -665,8 +678,12 @@ function start(onData, onError) {
   const timer = setInterval(tick, POLL_MS);
   return {
     stop() { stopped = true; clearInterval(timer); },
-    refresh: tick,
+    // Clears the backoff: the caller asking is the rider having just done
+    // something about it, and making them wait out a penalty they have already
+    // fixed is how a fix looks like it did not work.
+    refresh() { throttledUntil = 0; throttleStep = 0; return tick(); },
     get feedError() { return lastError; },
+    get throttledFor() { return Math.max(0, throttledUntil - Date.now() / 1000); },
   };
 }
 

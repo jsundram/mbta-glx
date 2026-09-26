@@ -130,6 +130,18 @@
   /* The archive is the one loss that cannot be undone, so it gets a colour of
      its own rather than another grey clause nobody reads. */
   .cap{color:var(--bad);font-weight:600}
+  /* Outside .foot on purpose: paint() rebuilds that innerHTML every 250 ms, and
+     an input inside it could never be typed into. */
+  .keyask{background:color-mix(in srgb,var(--bad) 8%,var(--card));
+          border:1px solid var(--bad);border-radius:8px;padding:11px 14px;
+          margin-top:12px;font-size:13px;line-height:1.5}
+  .keyask b{display:block;color:var(--bad);margin-bottom:3px}
+  .keyask form{display:flex;gap:6px;margin-top:8px}
+  .keyask input{flex:1;min-width:0;font:inherit;font-family:var(--mono);
+                padding:6px 8px;border:1px solid var(--line);border-radius:6px;
+                background:var(--card);color:var(--ink)}
+  .keyask button{font:inherit;padding:6px 12px;border-radius:6px;cursor:pointer;
+                 border:1px solid var(--go);background:var(--go);color:var(--card)}
   .stale{opacity:.45}
   .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
        background:var(--go);margin-right:6px;vertical-align:1px}
@@ -159,6 +171,22 @@
     <div class="scroll" id="histRows"></div>
   </div>
   <div class="foot" id="foot"></div>
+  <!-- Shown only while v3 is actually refusing us. A setting nobody is prompted
+       for is a setting nobody sets -- but prompting on first run for something
+       most riders never need is the other failure. This asks exactly when it
+       would help, and never otherwise. -->
+  <div class="keyask" id="keyask" hidden>
+    <b>MBTA is rate-limiting this device</b>
+    Their free API allows 20 requests a minute per address, and one board is most
+    of that. A key of your own lifts it. Free and instant from
+    <a href="https://api-v3.mbta.com" target="_blank" rel="noopener">api-v3.mbta.com</a>
+    — it is stored on this device only and never leaves it.
+    <form id="keyform">
+      <input id="keyin" type="text" inputmode="latin" autocomplete="off"
+             autocapitalize="off" spellcheck="false" placeholder="paste API key">
+      <button type="submit">Save</button>
+    </form>
+  </div>
 </div>
 <script src="app.js"></script>
 <script>
@@ -340,7 +368,18 @@ const dur = s => s >= 3600 ? `${Math.floor(s / 3600)}h ${pad((s % 3600) / 60)}m`
 
 function paint() {
   $("#clock").textContent = new Date().toLocaleTimeString([], {hour12: false});
-  if (!data) return;
+  // Before the `!data` guard: a device that is rate-limited on its FIRST load
+  // never gets data at all, so everything below this line never runs. That is
+  // the worst version of the bug this UI exists for -- a blank board and no
+  // explanation -- and it is exactly what a new phone on a busy wifi would see.
+  const rl = feed && feed.feedError === "ratelimit";
+  $("#keyask").hidden = !rl;
+  if (!data) {
+    if (rl) $("#foot").innerHTML =
+      `<span class="dot off"></span><span class="cap">MBTA is rate-limiting `
+      + `this device</span> &mdash; paste a key below, or close other boards`;
+    return;
+  }
   // One clock offset, measured at fetch, converts client time to server time.
   // Everything below is then a plain difference of absolute timestamps, which is
   // what makes the counters tick in real seconds instead of jumping per poll.
@@ -416,7 +455,6 @@ function paint() {
   // requests a minute per IP and one board is most of that, so a second tab or a
   // second device on the same wifi is enough. Without this the board just stops
   // and says nothing, which is how this was found.
-  const rl = feed && feed.feedError === "ratelimit";
   $("#foot").innerHTML =
     `<span class="dot${age > 30 ? " off" : ""}"></span>`
     + (rl ? `<span class="cap">MBTA is rate-limiting this device</span>`
@@ -579,6 +617,18 @@ function onData(d) {
 }
 
 function poll() { if (feed) feed.refresh(); }   // visibilitychange wants this
+
+// Wired once. Saving retries immediately rather than serving out the backoff --
+// the rider has just fixed the thing the backoff was for.
+$("#keyform").onsubmit = (e) => {
+  e.preventDefault();
+  const v = $("#keyin").value.trim();
+  if (!v) return;
+  try { localStorage.setItem("magoun.mbtakey", v); } catch (err) { /* private mode */ }
+  $("#keyin").value = "";
+  $("#keyask").hidden = true;
+  if (feed) feed.refresh();
+};
 
 keepAwake();
 feed = Magoun.start(onData, () => paint());
