@@ -389,8 +389,18 @@ checks the board still paints and simply shows no skipped train. Nothing used to
 cover any of that — the contract test stops at the rows, so a deleted CSS rule or
 a renamed field would have gone unnoticed.
 
+**Deployed 2026-09-26 and verified end to end.** `com.magoun.server` runs
+`serve.sh`, and `tailscale serve` publishes exactly two paths — so the proxy
+enforces the same line `BROWSER_ROUTES` does, from the other side. Measured
+through it: `/skips` and `/capture` answer 200 with `access-control-allow-origin: *`;
+`/api`, `/status`, `/board` and `/history` answer 404. `./ops/status.sh` checks all
+of it in one command. The exact `serve` invocations are in CLAUDE.md.
+
 **Still unobserved: a real one.** Skips are ~10/day system-wide, rare at Magoun,
-and the marker lands ~2 min before the scheduled arrival.
+and the marker lands ~2 min before the scheduled arrival. Note the notifier could
+not have seen one before 2026-09-26 either: `watch.sh` launched without
+`gtfs-realtime-bindings`, so every skip lookup raised and was swallowed as though
+the feed were down.
 
 **Done when:** a skipped train is struck through on the static board. Done for a
 synthesised skip, end to end in a browser; a live one is a matter of waiting.
@@ -546,6 +556,13 @@ than a code change.
 container; the URL is a published constant; CORS is identical either way. The real
 migration cost was never the endpoint — it is where `data/live` and `plan.json` live,
 and that is owed whenever M5 moves, Tailscale or not.
+
+**Live since 2026-09-26.** Two `--set-path` routes rather than serving `/`, so
+`/api` and the rest stay off the tailnet entirely — the static property is now
+enforced twice, by the CORS allowlist and by the proxy. One consequence found in
+use: the board is a *heavy* v3 client (~12.5 requests/min per open tab against an
+anonymous cap of 20 per client IP), and a home network puts every device behind
+one address. The backend is nearly idle by comparison. See CLAUDE.md's gotcha.
 
 **What it does not fix: sleep.** For M4 that is survivable — an asleep Mac means the
 fetch fails and the board degrades to an empty skip set, which is the designed

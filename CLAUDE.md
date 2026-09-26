@@ -41,6 +41,42 @@ uv run python src/rating.py --check              # has the schedule rating moved
 
 `ops/install.sh` is idempotent and must not be run with `sudo`.
 
+## What is running, and how to tell
+
+Deployed on this Mac since 2026-09-26. Four launchd agents, and a Tailscale proxy
+that is the only way the rider's phone reaches the backend.
+
+```bash
+./ops/status.sh        # agents, capture freshness, endpoints, keys -- one answer
+```
+
+| agent | what it does | dies quietly? |
+|---|---|---|
+| `com.magoun.archiver` | `record_rt.py`, appends every 15 s | **yes** — an un-captured day is gone; `/capture` and the board's footer exist for this |
+| `com.magoun.server` | `serve.sh` → `server.py` on 127.0.0.1:8723 | yes — the board degrades to an empty skip set |
+| `com.magoun.watch` | `watch.sh` → the notifier | yes — no push, no error |
+| `com.magoun.daily` | `daily.sh`, scheduled | no — it leaves a log |
+
+`tailscale serve` publishes exactly two paths, so the proxy enforces the same line
+`BROWSER_ROUTES` does. Set once, survives reboot, lost if Tailscale is reinstalled
+or `tailscale serve --https=443 off` is run:
+
+```bash
+tailscale serve --bg --https 443 --set-path /skips   http://127.0.0.1:8723/skips
+tailscale serve --bg --https 443 --set-path /capture http://127.0.0.1:8723/capture
+```
+
+Verified live: `/skips` and `/capture` answer 200 with `access-control-allow-origin: *`
+through the proxy; `/api`, `/status`, `/board` and `/history` answer **404** there.
+
+Secrets live in `ops/secrets.env` (gitignored; `ops/ntfy.env` is the older name and
+is still read). `ops/secrets.env.example` documents all three values. The board
+cannot read that file — its MBTA key is per device in
+`localStorage["magoun.mbtakey"]`, or pasted into the box the board shows when it is
+being rate-limited.
+
+The board is served at **https://jsundram.github.io/mbta-glx/** by `pages.yml`.
+
 ## Checks the suite cannot do
 
 Neither is collected by pytest, both need the real world, and both exist because

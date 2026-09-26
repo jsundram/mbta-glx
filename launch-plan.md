@@ -862,8 +862,16 @@ timed pushes ("train in 2 min" / "1 min" / "now") approximate a ticking countdow
 ### Also in Phase 5
 
 - [ ] Scheduler that arms watches from the day's brief and fires triggers.
-- [ ] Health check: the archiver dying silently is the top failure mode — during
+- [~] Health check: the archiver dying silently is the top failure mode — during
       this build two recorders ran simultaneously unnoticed for 20 minutes.
+      **Half done.** `GET /capture` reports the newest archive write and the board
+      says "archiver silent 1h 06m — losing data" past ten minutes, with
+      unreachable rendered as nothing so a phone off the tailnet cannot look like
+      data loss. `./ops/status.sh` answers the same question from a terminal.
+      Both are **passive** — they need somebody to look, and a dead archiver at
+      2am is exactly when nobody is. The proactive half wants its own small agent
+      pushing to ntfy; `watch.py` is the wrong host, because it returns before the
+      fetch when no plan is armed.
 
 ---
 
