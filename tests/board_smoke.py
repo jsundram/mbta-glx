@@ -54,6 +54,61 @@ def schedule_body(slots) -> dict:
                      for t, tr in slots]}
 
 
+def stub(page, live):
+    """Serve one shifted fixture in place of every MBTA endpoint the board calls."""
+    page.route(re.compile(r"api-v3\.mbta\.com/predictions"), lambda r: r.fulfill(
+        json={"data": live["preds"]}, content_type="application/json"))
+    page.route(re.compile(r"api-v3\.mbta\.com/vehicles"), lambda r: r.fulfill(
+        json={"data": live["vehicles"]}, content_type="application/json"))
+    page.route(re.compile(r"api-v3\.mbta\.com/schedules"), lambda r: r.fulfill(
+        json=schedule_body(live["slots"]), content_type="application/json"))
+    page.route(re.compile(r"api-v3\.mbta\.com/alerts"), lambda r: r.fulfill(
+        json={"data": []}, content_type="application/json"))
+
+
+def dwell_scenario(browser, check) -> None:
+    """A train sitting at Magoun: the one thing ArrivalTracker exists to show.
+
+    The dwell counter cannot be derived from a single snapshot -- the feed refreshes
+    a stopped train's timestamp -- so it is observed across polls, and nothing else
+    in the test suite touches the ported tracker.
+    """
+    case, index = _case_stopped_at_magoun()
+    if case is None:
+        check("a fixture has a train stopped at Magoun", False)
+        return
+    live = shifted(case, time.time() - case["now"] + 30)
+    page = browser.new_page()
+    stub(page, live)
+    page.route(re.compile(r"ntfy\.sh"), lambda r: r.fulfill(status=200, json={}))
+    page.goto(BOARD)
+    page.wait_for_timeout(5000)
+    label = page.inner_text("#heroLabel").strip()
+    big = page.inner_text("#heroBig").strip()
+    print(f"\n  replaying {index} (a train stopped at Magoun)")
+    print(f"  hero: {label} / {big}  |  {page.inner_text('#heroSub')[:70]}")
+    # .label is uppercased by CSS, so compare case-insensitively.
+    check("a train at the platform is shown as such",
+          label.lower() == "train at the station", label)
+    check("its dwell is counting in seconds",
+          bool(re.fullmatch(r"\d+:\d\d", big)), big)
+    check("the hero is marked as boardable now",
+          "here" in page.eval_on_selector("#hero", "e => e.className"))
+    page.close()
+
+
+def _case_stopped_at_magoun():
+    magoun = json.loads((ROOT / "web" / "model.json").read_text())["constants"]["stops"]["magoun_in"]
+    for f in sorted((ROOT / "tests" / "fixtures").glob("cases-*.json")):
+        for i, c in enumerate(json.loads(f.read_text())):
+            for v in c["vehicles"]:
+                a = v["attributes"]
+                if (a["direction_id"] == 0 and a["current_status"] == "STOPPED_AT"
+                        and (v["relationships"]["stop"]["data"] or {}).get("id") == magoun):
+                    return c, f"{f.stem}#{i}"
+    return None, None
+
+
 def run(case_index: int, headed: bool) -> int:
     from playwright.sync_api import sync_playwright
 
@@ -80,14 +135,7 @@ def run(case_index: int, headed: bool) -> int:
           localStorage.setItem("magoun.walk", "{WALK_S}");
           localStorage.removeItem("magoun.berths");
         """)
-        page.route(re.compile(r"api-v3\.mbta\.com/predictions"), lambda r: r.fulfill(
-            json={"data": live["preds"]}, content_type="application/json"))
-        page.route(re.compile(r"api-v3\.mbta\.com/vehicles"), lambda r: r.fulfill(
-            json={"data": live["vehicles"]}, content_type="application/json"))
-        page.route(re.compile(r"api-v3\.mbta\.com/schedules"), lambda r: r.fulfill(
-            json=schedule_body(live["slots"]), content_type="application/json"))
-        page.route(re.compile(r"api-v3\.mbta\.com/alerts"), lambda r: r.fulfill(
-            json={"data": []}, content_type="application/json"))
+        stub(page, live)
 
         def ntfy(route):
             req = route.request
@@ -154,6 +202,7 @@ def run(case_index: int, headed: bool) -> int:
             check("it re-arms about once a minute", 55 <= gap <= 90, f"{gap:.0f}s apart")
         check("the alert stays armed in the footer",
               "alert armed" in page.inner_text("#foot"))
+        dwell_scenario(browser, check)
         browser.close()
 
     print()
