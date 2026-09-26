@@ -43,6 +43,12 @@ ntfy holds the message until the computed leave time, the page re-arms it once a
 minute while open so a moving ETA stays current, and it still fires after you
 close the tab. First use asks for the topic and remembers it.
 
+Left open on a tablet it becomes a dashboard that keeps refining: it re-arms the
+alert every minute, holds the screen awake via `navigator.wakeLock` where
+supported, survives a browser-initiated reload, and re-arms immediately when the
+screen wakes. If the tablet dies the alert still fires — ntfy holds it — it just
+stops being updated.
+
 Below the map it scores itself: the **last 10 trains**, each showing when "leave
 now" would have fired and whether you would have caught it
 (`uv run python src/replay.py 390` for the same thing in the terminal).

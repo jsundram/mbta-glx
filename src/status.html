@@ -164,7 +164,29 @@ let data = null, lastOk = 0, version = null, dueLatch = null;
 // after the page is closed. Verified: reschedule delivers exactly once.
 const NTFY = localStorage.getItem("magoun.ntfy") || "";
 const SEQ = "magoun-leave";
-let armed = false;
+// Armed state is persisted: an always-on tablet dashboard will be reloaded by the
+// browser under memory pressure, and losing the arm silently would stop the
+// refinement that is the whole reason for leaving it open.
+let armed = localStorage.getItem("magoun.armed") === "1";
+
+// Keep the screen awake where the browser allows it, so the dashboard keeps
+// refining without relying on Auto-Lock being set to Never.
+let wakeLock = null;
+async function keepAwake() {
+  try {
+    if ("wakeLock" in navigator && !wakeLock) {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.addEventListener("release", () => { wakeLock = null; });
+    }
+  } catch (e) { /* unsupported or refused; Auto-Lock=Never is the fallback */ }
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  // Coming back from sleep: the pending alert may be stale, so refresh at once.
+  keepAwake();
+  window._lastArm = 0;
+  poll();
+});
 
 async function armAlert(next) {
   if (!NTFY) {
@@ -188,6 +210,8 @@ async function armAlert(next) {
       body: `${hhmm(next.eta)} train from Magoun · ${Math.round((next.hi-next.lo)/2)}s band`,
     });
     armed = true;
+    localStorage.setItem("magoun.armed", "1");
+    localStorage.setItem("magoun.armedEta", String(Math.round(next.eta)));
     paint();
   } catch (e) { alert("could not set the alert: " + e.message); }
 }
@@ -197,6 +221,8 @@ async function cancelAlert() {
     await fetch(`https://ntfy.sh/${NTFY}/${SEQ}/delete`);
   } catch (e) { /* the alert simply stays scheduled */ }
   armed = false;
+  localStorage.removeItem("magoun.armed");
+  localStorage.removeItem("magoun.armedEta");
   paint();
 }
 
@@ -255,9 +281,17 @@ function paint() {
       a.lifecycle === "UPCOMING" ? " · upcoming" : ""}</b>${
       (a.header || a.short || "").slice(0, 190)}</div>`).join("");
   // While the page is open, keep any armed alert pointed at the current ETA.
-  if (armed && data.next && Date.now()/1000 - (window._lastArm || 0) > 60) {
-    window._lastArm = Date.now()/1000;
-    armAlert(data.next);
+  // Once the alert has fired there is nothing left to refine, so disarm.
+  if (armed) {
+    const target = +(localStorage.getItem("magoun.armedEta") || 0);
+    if (target && now > target + 60) {
+      armed = false;
+      localStorage.removeItem("magoun.armed");
+      localStorage.removeItem("magoun.armedEta");
+    } else if (data.next && Date.now()/1000 - (window._lastArm || 0) > 60) {
+      window._lastArm = Date.now()/1000;
+      armAlert(data.next);
+    }
   }
   drawMap();
   $("#following").innerHTML = (data.following || []).map(r =>
@@ -278,7 +312,8 @@ function paint() {
     + ` &middot; ${u.at_terminus ?? 0} at Medford/Tufts, `
     + `${(u.departed_med || []).length} past Medford, `
     + `${(u.departed_ball || []).length} past Ball Sq`
-    + ` &middot; median headway ${(data.headway_median_s / 60).toFixed(1)} min`;
+    + ` &middot; median headway ${(data.headway_median_s / 60).toFixed(1)} min`
+    + (armed ? ` &middot; <span style="color:var(--go)">alert armed, refreshing</span>` : "");
 }
 
 let rowTops = [];
@@ -420,6 +455,7 @@ async function poll() {
   } catch (e) { /* keep painting from the last good reading */ }
   paint();
 }
+keepAwake();
 setInterval(paint, 250);
 setInterval(poll, 5000);
 setInterval(history, 60000);
