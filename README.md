@@ -102,15 +102,20 @@ Set `MBTA_API_KEY` (free, from api-v3.mbta.com) to lift the keyless rate limit.
 
 **One-time setup:**
 
-1. Install the **ntfy** app (iOS/Android, free) and subscribe to
-   **`MAGOUN_NTFY_TOPIC` only** (from `ops/ntfy.env`). Do *not* subscribe to
-   `MAGOUN_NTFY_CMD` — that topic carries button taps in the other direction, and
-   subscribing to it just echoes your own commands back at you. Both strings are
-   unguessable and act as passwords, so the file is gitignored.
-   Allow ntfy through your Focus settings, or the leave-now alert stays silent.
-2. Test the channel: `./src/watch.sh` is the runtime; for a one-off check run
-   `set -a && . ops/ntfy.env && set +a && uv run python src/notify.py`.
-3. Install the agent: `./ops/install.sh` (adds `com.magoun.watch`).
+1. Copy `ops/secrets.env.example` to `ops/secrets.env` and fill it in. It is
+   gitignored; `ops/ntfy.env` is the older name for the same file and is still
+   read, so an existing setup needs no migration.
+2. Install the **ntfy** app (iOS/Android, free) and subscribe to
+   **`MAGOUN_NTFY_TOPIC` only**. Do *not* subscribe to `MAGOUN_NTFY_CMD` — that
+   topic carries button taps in the other direction, and subscribing to it just
+   echoes your own commands back at you. Both strings are unguessable and act as
+   passwords. Allow ntfy through your Focus settings, or the leave-now alert
+   stays silent.
+3. Test the channel: `./src/watch.sh` is the runtime; for a one-off check run
+   `set -a && . ops/secrets.env && set +a && uv run python src/notify.py`.
+4. Install the agents: `./ops/install.sh` — the archiver, the backend, the
+   notifier and the daily job. Then `./ops/status.sh` to see all four running,
+   how fresh the archive is, and whether the endpoints answer.
 
 **Daily use** — tell it where you need to be, then answer the notifications:
 
