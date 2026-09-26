@@ -9,6 +9,8 @@ schedule is worst (biased 4.7 min early, band 818 s).
 import numpy as np
 import polars as pl
 
+import service
+
 from backtest import load
 from model import Model
 
@@ -72,7 +74,8 @@ def predict(T, trains, slots, m, q, walk, use_berth, boff=None):
     return min(ok) if ok else (min(cands) if cands else T + walk)
 
 
-def run(walk=390):
+def run(walk=None):
+    walk = walk or service.DEFAULT_WALK
     df, sched = load()
     test = sorted(sched)
     train = df.filter(~pl.col("service_date").is_in(test))

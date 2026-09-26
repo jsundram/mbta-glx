@@ -117,7 +117,7 @@ def test_fixtures_are_self_contained():
 
 WEB = pathlib.Path(__file__).resolve().parent.parent / "web"
 CONSTANTS = {"veto_window_s", "stale_vehicle_s", "dedupe_s", "min_gap_s",
-             "horizon_s", "band_s", "stops", "glx", "alert_corridor"}
+             "horizon_s", "band_s", "stops", "glx", "alert_corridor", "walk_s"}
 
 
 def test_web_model_is_the_published_copy():
@@ -145,6 +145,41 @@ def test_model_carries_every_constant_the_port_needs():
     """Anything the JS would otherwise re-type has to be in model.json."""
     got = set(json.loads((WEB / "model.json").read_text())["constants"])
     assert CONSTANTS <= got, f"model.json is missing: {sorted(CONSTANTS - got)}"
+
+
+def test_the_walk_has_exactly_one_source():
+    """It was the literal 390 in eight files. data/config.json is the copy now.
+
+    A rider preference rather than a fitted value, so it lives in config rather than
+    being fitted -- but it is published into model.json, because a board defaulting
+    to one walk while stats.json scores another describes a different rider than the
+    one reading the panel.
+    """
+    cfg = json.loads((service.ROOT / "data" / "config.json").read_text())
+    assert service.DEFAULT_WALK == cfg["walk_s"]
+    assert json.loads((WEB / "model.json").read_text())["constants"]["walk_s"] == \
+        cfg["walk_s"], "model.json publishes a different walk than config.json"
+
+
+def test_no_module_retypes_the_walk():
+    """Every consumer reads service.DEFAULT_WALK; only the config names the number."""
+    literal = str(json.loads((service.ROOT / "data" / "config.json").read_text())["walk_s"])
+    offenders = []
+    for f in sorted((service.ROOT / "src").glob("*.py")):
+        for i, line in enumerate(f.read_text().splitlines(), 1):
+            if literal in line and "1790" not in line:
+                # service.py holds the one fallback, for a missing config file.
+                if f.name == "service.py":
+                    continue
+                offenders.append(f"{f.name}:{i}")
+    assert not offenders, f"the walk is re-typed at {offenders}"
+
+
+def test_the_board_does_not_retype_the_walk():
+    js = (WEB / "app.js").read_text()
+    assert 'need("walk_s")' in js, "the board does not read the published walk"
+    walk = json.loads((WEB / "model.json").read_text())["constants"]["walk_s"]
+    assert f"= {walk}" not in js, "app.js still hardcodes a default walk"
 
 
 def test_glx_stops_match_the_python_definition():

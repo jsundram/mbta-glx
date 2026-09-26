@@ -13,7 +13,7 @@ import service
 import simulate
 
 OUT = service.ROOT / "tests" / "fixtures"
-WALK = 390
+WALK = service.DEFAULT_WALK
 QS = (0.1, 0.5, 0.9)
 HORIZON = 45 * 60
 

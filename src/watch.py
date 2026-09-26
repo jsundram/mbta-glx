@@ -22,7 +22,7 @@ import service
 
 STATE = service.ROOT / "data" / "plan.json"
 TICK = 20.0
-WALK = int(os.environ.get("MAGOUN_WALK_S", "390"))
+WALK = service.DEFAULT_WALK
 MATCH = 300          # normal re-match window for a committed train
 WIDE = 900           # fallback window: MBTA predictions flap by several minutes
 # Observed flap durations: 90 s (16:23->16:31->16:23) and 90 s (17:19->17:11).

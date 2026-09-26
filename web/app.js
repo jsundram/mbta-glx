@@ -327,7 +327,10 @@ const ROUTES = "Green-B,Green-C,Green-D,Green-E";
 const POLL_MS = 10000;          // the Mac server refreshed on a 10 s cache too
 const MODEL_RECHECK_MS = 3600000;
 const QS = [0.1, 0.5, 0.9];     // mirrors service.etas' default quantiles
-const WALK_DEFAULT_S = 390;     // measured door-to-platform, overridable per rider
+// The default walk is published in model.json so the board and the backend that
+// scores it cannot drift apart. Set once the model loads, which always happens
+// before walkSeconds() can be reached (it is only called with a row in hand).
+let walkDefaultS = null;
 
 const store = {
   get(k, dflt) {
@@ -337,8 +340,14 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* private mode */ } },
 };
 
-/** The rider's walk, in seconds. One definition, read by the board too. */
-const walkSeconds = () => Number(store.get("magoun.walk", WALK_DEFAULT_S));
+/** The rider's walk, in seconds. One definition, read by the board too.
+ *  Their own setting wins; the published default is the fallback. */
+const walkSeconds = () => {
+  const v = store.get("magoun.walk", null);
+  if (v !== null) return Number(v);
+  if (walkDefaultS === null) throw new Error("model.json has no constant walk_s");
+  return walkDefaultS;
+};
 
 /** Today's service date in the agency's timezone -- never a fixed offset, so
  *  EDT->EST on 2026-11-01 does not shift the schedule by an hour. */
@@ -494,6 +503,7 @@ function start(onData, onError) {
     if (modelText !== null && text !== modelText) return location.reload();
     modelText = text;
     model = new Model(JSON.parse(text));
+    walkDefaultS = model.need("walk_s");   // throws on a deploy that dropped it
     // status.html reloads the page when `version` changes; tie it to the model so
     // a refit published under a tablet reaches the rider without a manual reload.
     model.version = `m${text.length}:${model.m.days}:${model.m.n_legs}`;

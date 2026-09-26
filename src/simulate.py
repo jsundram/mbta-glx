@@ -92,7 +92,9 @@ def observed(day: str) -> list[float]:
 # ---- strategies: snapshot -> recommended platform-arrival time, or None ----
 
 def make_strategy(model: service.Model, q: float = 0.10, tiers=("mbta", "schedule"),
-                  walk: int = 390) -> Callable[[dict, dict], float | None]:
+                  walk: int | None = None) -> Callable[[dict, dict], float | None]:
+    walk = walk if walk is not None else service.DEFAULT_WALK
+
     def strat(snapv3: dict, berths: dict) -> float | None:
         rows = service.etas(snapv3, model, walk, qs=(q, 0.5, 0.9), berths=berths)
         now = snapv3["t"]
@@ -118,13 +120,14 @@ def adapted(day: str) -> list[dict]:
     return _ADAPTED[day]
 
 
-def run(day: str, strat, walk: int = 390,
+def run(day: str, strat, walk: int | None = None,
         every: int = 300) -> list[tuple[float, float]]:
     """Riders decide every `every` seconds and follow the strategy until it fires.
 
     The recommendation is computed once per snapshot, not once per rider: a naive
     nested loop is O(riders x snapshots) and takes minutes per strategy.
     """
+    walk = walk if walk is not None else service.DEFAULT_WALK
     snaps = adapted(day)
     arrivals = observed(day)
     if not snaps or not arrivals:
@@ -162,7 +165,7 @@ if __name__ == "__main__":
     import sys
     import statistics as st
     day = sys.argv[1] if len(sys.argv) > 1 else "2026-09-25"
-    walk = int(sys.argv[2]) if len(sys.argv) > 2 else 390
+    walk = int(sys.argv[2]) if len(sys.argv) > 2 else service.DEFAULT_WALK
     m = service.Model()
     # Freeze the live lookups so the replay sees only what was archived.
     service.skipped_trips = lambda *a, **k: set()

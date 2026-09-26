@@ -88,6 +88,10 @@ def main() -> None:
         "dedupe_s": 240,            # a schedule row this close to a live row is it
         "min_gap_s": 120,           # keep schedule rows this far past the last row
         "horizon_s": 45 * 60,
+        # A rider preference, not a fitted value -- but published so the board's
+        # default and the walk the backend scores with cannot silently differ.
+        # data/config.json is the one copy; the rider overrides it in the UI.
+        "walk_s": service.DEFAULT_WALK,
         "band_s": {"mbta": 75, "departed Ball Sq": 7,
                    "departed Medford/Tufts": 33},
         "stops": {"magoun_in": "70508", "ball_in": "70510",

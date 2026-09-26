@@ -99,6 +99,10 @@ without anyone noticing.
 
 - **polars** for anything that ships or is tested; **DuckDB** (`src/q.sh`) for
   ad-hoc questions only — it must stay out of the deploy path.
+- **One copy of the walk.** `data/config.json` holds `walk_s`; everything reads
+  `service.DEFAULT_WALK` and `fit.py` publishes it into `model.json` so the board's
+  default and the walk `stats.py` scores with cannot disagree. `MAGOUN_WALK_S` still
+  overrides for one-off experiments. It was the literal `390` in eight files.
 - **Model as data.** `data/model.json` holds every fitted quantile so consumers do
   lookup and arithmetic, not modelling. This is what keeps a future JS frontend
   from becoming a second implementation.

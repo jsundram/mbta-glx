@@ -10,6 +10,8 @@ import gzip
 import json
 import pathlib
 
+import service
+
 MAGOUN_IN = "70508"
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 LIVE = ROOT / "data" / "live"
@@ -66,7 +68,7 @@ def _snapshots(paths):
                     yield json.loads(line)
 
 
-def score(walk: int = 390, band: int = 75, n: int = 10, paths=None,
+def score(walk: int | None = None, band: int = 75, n: int = 10, paths=None,
           sched_band: int = 22, day: str | None = None) -> list[dict]:
     """Replay the last `n` arrivals as the service would have handled them.
 
@@ -75,6 +77,7 @@ def score(walk: int = 390, band: int = 75, n: int = 10, paths=None,
     against MBTA predictions alone would understate the app, because the schedule
     is what carries the horizon beyond ~13 minutes.
     """
+    walk = walk if walk is not None else service.DEFAULT_WALK
     paths = paths or (sorted(LIVE.glob("rt-*.jsonl*.gz"))
                       + sorted(LIVE.glob("day=*")))[-2:]
     arrivals: list[tuple[float, str]] = []
@@ -144,7 +147,7 @@ def score(walk: int = 390, band: int = 75, n: int = 10, paths=None,
 if __name__ == "__main__":
     import datetime
     import sys
-    walk = int(sys.argv[1]) if len(sys.argv) > 1 else 390
+    walk = int(sys.argv[1]) if len(sys.argv) > 1 else service.DEFAULT_WALK
     rows = score(walk=walk, n=12)
     f = lambda t: datetime.datetime.fromtimestamp(t).strftime("%H:%M:%S")
     print(f"replaying the last {len(rows)} arrivals at a {walk/60:.1f} min walk\n")

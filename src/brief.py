@@ -169,7 +169,7 @@ if __name__ == "__main__":
     import sys
     dest = sys.argv[1] if len(sys.argv) > 1 else "70199"
     hhmm = sys.argv[2] if len(sys.argv) > 2 else "17:30"
-    walk = int(os.environ.get("MAGOUN_WALK_S", "390"))
+    walk = service.DEFAULT_WALK
     m = service.Model()
     dest = resolve(dest, m)
     now = dt.datetime.now(service.TZ)

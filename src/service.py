@@ -41,7 +41,24 @@ GLX_STOPS = [
 ]
 IN_IDX = {sid: i for i, (_, sid, _) in enumerate(GLX_STOPS)}
 OUT_IDX = {sid: i for i, (_, _, sid) in enumerate(GLX_STOPS)}
-DEFAULT_WALK_ENV = int(os.environ.get("MAGOUN_WALK_S", "390"))
+def _config() -> dict:
+    """Rider preferences, not fitted values. data/config.json is the one copy.
+
+    This used to be the literal 390 in eight files. It is a preference, so it is
+    not in model.json's fitted block -- but fit.py does publish it into the
+    constants the board reads, so the board's default walk and the walk the backend
+    scores with cannot silently disagree.
+    """
+    path = ROOT / "data" / "config.json"
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return {}
+
+
+CONFIG = _config()
+# The env var still wins, for one-off experiments without editing the config.
+DEFAULT_WALK_ENV = int(os.environ.get("MAGOUN_WALK_S", CONFIG.get("walk_s", 390)))
 KEY = os.environ.get("MBTA_API_KEY")
 VETO_WINDOW = 480        # a scheduled train this close with nothing upstream is a no-show
 DEFAULT_WALK = DEFAULT_WALK_ENV
