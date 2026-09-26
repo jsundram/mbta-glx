@@ -372,10 +372,16 @@ survive a reboot unless it is in the launchd plist.
 **The line that keeps the door open.** The endpoint serves *only* what a browser
 physically cannot fetch. The moment it serves computed rows, the static property is
 gone and fly.io stops being optional. That is an intention, so it is enforced rather
-than hoped for: `server.BROWSER_ROUTES` is an allowlist with a stated reason per
-entry, and `tests/test_regressions.py` fails if a CORS header appears outside it, if
-the board reaches a host that is not justified, or if the board starts calling a
-computed-rows route. Verified by injecting all four.
+than hoped for: `server._send` emits the CORS header from exactly one
+place, gated on `BROWSER_ROUTES` — an allowlist with a stated reason per entry — and
+`tests/test_regressions.py` asserts that structure rather than the mere presence of
+the name. It also fails if any `web/` file *or* `model.json` constant names an
+unjustified host, and if the board calls a computed-rows route.
+
+Verified live, not just by grep: `/api` carries no CORS header, `/live-extras.json`
+does (404 until M4 builds it), `/nope` does not. The first version of the test was
+decoration — it checked only that the string `BROWSER_ROUTES` appeared somewhere,
+which the definition satisfied, so CORS on `/api` passed the whole suite.
 
 ## 6. Explicit non-goals
 

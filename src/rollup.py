@@ -5,11 +5,21 @@ need for calibration is "at lead time L, the feed said T_pred; the train came at
 T_actual". That is a few hundred KB per day instead of ~14 MB, and it is the only
 form the model ever reads.
 
+A prediction that never matched an arrival is kept, with a null `actual_arr`. Null
+means "no later arrival of this vehicle at this stop in THIS day's archive", so it
+covers end-of-day truncation as well as a genuine no-show -- an analysis must ignore
+predictions made near the archive's end rather than trusting every null. Measured
+3.7% at Magoun inbound, spread through the day. Days written before 2026-09-26
+contain no nulls at all because the rows were dropped; both archived days were
+re-rolled with --force, so the local store is uniform, but a day restored from
+elsewhere may not be.
+
 Usage:
   python src/rollup.py                 # roll up any day not yet rolled up
   python src/rollup.py --prune 14      # then delete raw archives older than 14 days
 """
 import argparse
+import datetime as dt
 import gzip
 import json
 import pathlib
@@ -19,6 +29,8 @@ import time
 from collections.abc import Iterator
 
 import polars as pl
+
+import service
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 LIVE = ROOT / "data" / "live"
@@ -278,7 +290,13 @@ def main() -> None:
     ap.add_argument("--force", action="store_true")
     a = ap.parse_args()
     PAIRS.mkdir(parents=True, exist_ok=True)
-    today = time.strftime("%Y-%m-%d")
+    # Invariant 8: a real zone. Archive filenames are ET service days, so on a
+    # UTC-clocked host the host's date rolls over at 20:00 ET and the still-open day
+    # gets rolled up -- then skipped forever, because out.exists(). Since unpaired
+    # predictions are now kept, that would write every prediction after the
+    # truncation point as a null "never arrived": the exact contamination this
+    # evidence is being collected to avoid.
+    today = dt.datetime.now(service.TZ).date().isoformat()
 
     for raw in sorted(list(LIVE.glob("rt-*.jsonl*.gz")) + list(LIVE.glob("day=*"))):
         day = re.search(r"(\d{4}-\d{2}-\d{2})", raw.name).group(1)

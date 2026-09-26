@@ -211,7 +211,10 @@ def main() -> None:
         t0 = time.time()
         try:
             scores[day] = score_day(day, path, a.walk)
-        except FileNotFoundError as e:
+        except replay.NoScheduleSnapshot as e:
+            # Narrow on purpose: a bare FileNotFoundError would also swallow a
+            # missing data/model.json and report it as a schedule problem, while
+            # stats.json silently never updated.
             # Loud and repeated every run, deliberately. Recording a score computed
             # without the timetable tier would undercount coverage permanently,
             # because a day already in the scoreboard is never rescored.

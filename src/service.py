@@ -51,14 +51,21 @@ def _config() -> dict:
     """
     path = ROOT / "data" / "config.json"
     try:
-        return json.loads(path.read_text())
-    except FileNotFoundError:
+        cfg = json.loads(path.read_text())
+    except (OSError, ValueError):
+        # A truncated or conflict-mangled file must not take down `import service`,
+        # which would restart-loop watch.py under launchd KeepAlive. data/ lives in
+        # Dropbox and churns daily.
         return {}
+    return cfg if isinstance(cfg, dict) else {}
 
 
 CONFIG = _config()
 # The env var still wins, for one-off experiments without editing the config.
-DEFAULT_WALK_ENV = int(os.environ.get("MAGOUN_WALK_S", CONFIG.get("walk_s", 390)))
+# `or` rather than a default chain: a null walk_s in the config must fall through
+# to the literal rather than reaching int(None).
+CONFIG_WALK = int(CONFIG.get("walk_s") or 390)      # the config's walk, override ignored
+DEFAULT_WALK_ENV = int(os.environ.get("MAGOUN_WALK_S") or CONFIG_WALK)
 KEY = os.environ.get("MBTA_API_KEY")
 VETO_WINDOW = 480        # a scheduled train this close with nothing upstream is a no-show
 DEFAULT_WALK = DEFAULT_WALK_ENV

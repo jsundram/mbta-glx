@@ -101,10 +101,15 @@ without anyone noticing.
   ad-hoc questions only — it must stay out of the deploy path.
 - **The backend serves only what a browser cannot fetch.** The board computes its
   own rows; the one thing it asks for is the protobuf-only skip set. Cross-origin
-  reachability *is* the CORS header, so `server.BROWSER_ROUTES` allowlists it with a
-  reason per entry and tests fail on a CORS header outside the list, an unjustified
-  host in `web/`, or the board calling a computed-rows route. Serving rows from the
-  backend gives up the static architecture.
+  reachability *is* the CORS header, so `server._send` emits it from exactly one
+  place, gated on `BROWSER_ROUTES`, and the test asserts that structure — one
+  emitting line with the allowlist checked above it. An earlier version of that test
+  only asserted the string `BROWSER_ROUTES` appeared in the file, which the
+  definition itself satisfied: CORS on `/api` passed the whole suite. An allowlist
+  nothing consults is decoration. The board side is checked too: no unjustified host
+  in any `web/` file *or* in `model.json`'s constants (the M4 URL will be published
+  there, so grepping `web/` for `https://` cannot see it), and no call to a
+  computed-rows route.
 - **Keep unresolved predictions.** `rollup.py` stores a prediction that never
   matched an arrival with a null `actual_arr`. It used to drop them, so `data/pairs`
   — the store that is never pruned — held no evidence of a train that was predicted

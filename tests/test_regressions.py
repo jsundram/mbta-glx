@@ -4,6 +4,7 @@ Every test here corresponds to a bug that actually shipped and cost real debuggi
 time. They run in under a second, which is the point: most of these were found by
 waiting for trains, and none of them needed to be.
 """
+import json
 import re
 import sys
 import pathlib
@@ -344,7 +345,9 @@ ALLOWED_HOSTS = {
 
 
 def _board_source() -> str:
-    return (WEB_DIR / "app.js").read_text() + (WEB_DIR / "board.html").read_text()
+    """Everything served from the origin. proof.html was missed and fetches MBTA."""
+    return "\n".join(p.read_text() for p in
+                     sorted(WEB_DIR.glob("*.js")) + sorted(WEB_DIR.glob("*.html")))
 
 
 def test_the_board_reaches_no_host_it_has_no_reason_to():
@@ -362,28 +365,46 @@ def test_the_board_reaches_no_host_it_has_no_reason_to():
         "with the reason; if it serves computed rows, the board is no longer static.")
 
 
-def test_only_allowlisted_routes_may_be_reachable_from_a_browser():
+def test_the_cors_header_is_sent_from_one_place_gated_by_the_allowlist():
     """Cross-origin reachability IS the CORS header, so that is what is policed.
 
-    Adding Access-Control-Allow-Origin to /api would hand the board a server that
-    computes its rows for it, which is the one thing the static architecture is
-    built to avoid. server.py's BROWSER_ROUTES is the deliberate list.
+    The previous version of this test asserted only that the string BROWSER_ROUTES
+    appeared somewhere in the file, which the definition itself satisfied. Adding
+    Access-Control-Allow-Origin to /api passed all of it while making the board's
+    computed rows fetchable cross-origin -- verified, which is why this is now
+    structural: exactly one emitting line, and the allowlist consulted right above it.
     """
+    lines = SERVER.read_text().splitlines()
+    cors = [i for i, l in enumerate(lines)
+            if "Access-Control-Allow-Origin" in l and not l.lstrip().startswith("#")]
+    assert len(cors) == 1, (
+        f"the CORS header is sent from {len(cors)} place(s); it must come from exactly "
+        "one, gated by BROWSER_ROUTES, or the allowlist is decoration")
+    guard = "\n".join(lines[max(0, cors[0] - 6):cors[0]])
+    assert "BROWSER_ROUTES" in guard, (
+        "the CORS header is not guarded by a BROWSER_ROUTES membership check")
+
+
+def test_the_allowlist_only_names_routes_that_exist_or_are_planned():
     import server
-    src = SERVER.read_text()
-    # Every route the handler answers, and every route named near a CORS header.
-    cors_lines = [i for i, l in enumerate(src.splitlines())
-                  if "Access-Control-Allow-Origin" in l and not l.lstrip().startswith("#")]
-    if not cors_lines:
-        return          # no CORS anywhere yet: nothing is browser-reachable
-    routes = set(re.findall(r'u\.path == "([^"]+)"', src))
-    allowed = set(server.BROWSER_ROUTES)
-    assert allowed <= routes | {"/live-extras.json"}, \
-        f"BROWSER_ROUTES names routes that do not exist: {sorted(allowed - routes)}"
-    # A CORS header must be inside a branch for an allowlisted route, which we
-    # approximate by requiring the allowlist to be consulted rather than bypassed.
-    assert "BROWSER_ROUTES" in src, \
-        "server.py sends CORS headers without consulting BROWSER_ROUTES"
+    routes = set(re.findall(r'u\.path == "([^"]+)"', SERVER.read_text()))
+    planned = {"/live-extras.json"}          # M4
+    extra = set(server.BROWSER_ROUTES) - routes - planned
+    assert not extra, f"BROWSER_ROUTES names routes that do not exist: {sorted(extra)}"
+
+
+def test_no_published_constant_smuggles_in_an_unjustified_host():
+    """The board will read the M4 endpoint URL from model.json, not a literal.
+
+    So scanning web/ for `https://` cannot see it -- architecture.md specifies the
+    URL as a published constant, exactly like walk_s. Check the constants too.
+    """
+    c = json.loads((WEB_DIR / "model.json").read_text())["constants"]
+    hosts = set(re.findall(r"https?://([a-z0-9.-]+)", json.dumps(c)))
+    extra = hosts - set(ALLOWED_HOSTS)
+    assert not extra, (
+        f"model.json publishes hosts the board would reach: {sorted(extra)}. Add them "
+        "to ALLOWED_HOSTS with the reason a browser cannot fetch them otherwise.")
 
 
 def test_the_browser_route_allowlist_states_a_reason_for_each_entry():
@@ -401,8 +422,9 @@ def test_the_board_computes_its_own_rows():
     js = (WEB_DIR / "app.js").read_text()
     assert "computeRows" in js or "compute_rows" in js, \
         "app.js no longer contains the ported prediction function"
-    # A path-anchored match: plain "/api" also occurs inside "api-v3.mbta.com".
-    assert not re.search(r"""["'`]/api\b""", js), \
+    # Path-anchored: plain "/api" also occurs inside "api-v3.mbta.com". The `}`
+    # alternative catches an interpolated base, `${EXTRAS}/api`.
+    assert not re.search(r"""(?:["'`]|\})/api\b""", js), \
         "the board is calling the backend's computed-rows route"
 
 

@@ -195,7 +195,10 @@ async function armAlert(next) {
     localStorage.setItem("magoun.ntfy", t.trim());
     return location.reload();
   }
-  const walk = +(localStorage.getItem("magoun.walk") || 390);
+  // The rider's own setting wins; otherwise the walk the server actually used,
+  // which /api echoes. No literal here: data/config.json is the one copy.
+  const walk = +(localStorage.getItem("magoun.walk") || (data && data.walk) || 0);
+  if (!walk) return;
   const leaveAt = Math.max(Math.round(next.lo - walk), Math.round(Date.now()/1000) + 11);
   try {
     await fetch(`https://ntfy.sh/${NTFY}`, {
@@ -415,7 +418,7 @@ function drawMap() {
 
 async function history() {
   try {
-    const d = await (await fetch("/history?walk=6", {cache: "no-store"})).json();
+    const d = await (await fetch("/history", {cache: "no-store"})).json();
     if (d.error) throw new Error(d.error);
     const rows = (d.rows || []).slice().reverse();
     let caught = 0, usable = 0, waited = 0;

@@ -18,6 +18,10 @@ LIVE = ROOT / "data" / "live"
 SCHED = ROOT / "data" / "sched_full"
 
 
+class NoScheduleSnapshot(FileNotFoundError):
+    """A pinned day has no captured schedule, so it cannot be scored honestly."""
+
+
 def _schedule_slots(day: str | None = None) -> list[float]:
     """Scheduled inbound arrivals at Magoun, from the daily snapshots.
 
@@ -35,7 +39,7 @@ def _schedule_slots(day: str | None = None) -> list[float]:
         # would then write that score down as final.
         files = [SCHED / f"{day}.json.gz"]
         if not files[0].exists():
-            raise FileNotFoundError(
+            raise NoScheduleSnapshot(
                 f"no schedule snapshot for {day}: {files[0]}. The v3 /schedules "
                 "endpoint only serves ~8 days back, so an un-captured day is gone "
                 "and cannot be scored against its timetable.")

@@ -75,7 +75,7 @@ def predict(T, trains, slots, m, q, walk, use_berth, boff=None):
 
 
 def run(walk=None):
-    walk = walk or service.DEFAULT_WALK
+    walk = walk if walk is not None else service.DEFAULT_WALK
     df, sched = load()
     test = sorted(sched)
     train = df.filter(~pl.col("service_date").is_in(test))

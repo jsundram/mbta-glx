@@ -165,21 +165,29 @@ def test_no_module_retypes_the_walk():
     """Every consumer reads service.DEFAULT_WALK; only the config names the number."""
     literal = str(json.loads((service.ROOT / "data" / "config.json").read_text())["walk_s"])
     offenders = []
-    for f in sorted((service.ROOT / "src").glob("*.py")):
+    # .html too: src/status.html held a second copy that only .py scanning missed.
+    files = (sorted((service.ROOT / "src").glob("*.py"))
+             + sorted((service.ROOT / "src").glob("*.html")))
+    for f in files:
+        # service.py holds the one fallback, for a missing or mangled config file.
+        if f.name == "service.py":
+            continue
         for i, line in enumerate(f.read_text().splitlines(), 1):
-            if literal in line and "1790" not in line:
-                # service.py holds the one fallback, for a missing config file.
-                if f.name == "service.py":
-                    continue
+            # Word-anchored: a bare substring match fires on 3900, a stop id or an
+            # epoch, and the old "1790" escape hatch was already dead.
+            if re.search(rf"\b{literal}\b", line):
                 offenders.append(f"{f.name}:{i}")
     assert not offenders, f"the walk is re-typed at {offenders}"
 
 
 def test_the_board_does_not_retype_the_walk():
-    js = (WEB / "app.js").read_text()
-    assert 'need("walk_s")' in js, "the board does not read the published walk"
     walk = json.loads((WEB / "model.json").read_text())["constants"]["walk_s"]
-    assert f"= {walk}" not in js, "app.js still hardcodes a default walk"
+    for name in ("app.js", "board.html"):
+        src = (WEB / name).read_text()
+        assert not re.search(rf"\b{walk}\b", src), \
+            f"web/{name} hardcodes a default walk"
+    assert "walk_s" in (WEB / "app.js").read_text(), \
+        "the board does not read the published walk at all"
 
 
 def test_glx_stops_match_the_python_definition():

@@ -59,6 +59,17 @@ BROWSER_ROUTES = {
 }
 
 
+def _walk(query: str) -> int:
+    """The walk in seconds: ?walk=<minutes> if given, else the configured default.
+
+    This used to default to 6 minutes -- a third number, disagreeing with the walk in
+    data/config.json that the board and the notifier both read. The number itself is
+    deliberately not repeated here; prose goes stale too.
+    """
+    q = parse_qs(query).get("walk")
+    return int(float(q[0]) * 60) if q else service.DEFAULT_WALK
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):  # quiet
         pass
@@ -66,7 +77,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         u = urlparse(self.path)
         if u.path == "/api":
-            walk = int(parse_qs(u.query).get("walk", ["6"])[0]) * 60
+            walk = _walk(u.query)
             try:
                 snap, berths = current_snapshot()
                 rows = service.etas(snap, _model, walk, berths=berths)
@@ -126,7 +137,7 @@ class Handler(BaseHTTPRequestHandler):
                            json.dumps({"error": str(e)}).encode())
         elif u.path == "/history":
             try:
-                walk = int(parse_qs(u.query).get("walk", ["6"])[0]) * 60
+                walk = _walk(u.query)
                 rows = replay.score(walk=walk, n=10)
                 self._send(200, "application/json",
                            json.dumps({"rows": rows, "walk": walk}).encode())
@@ -146,6 +157,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        # The ONE place this header is emitted, and only for an allowlisted route.
+        # An allowlist nothing consults is decoration: until this existed, adding
+        # Access-Control-Allow-Origin to /api made the board's rows fetchable
+        # cross-origin with every test still green.
+        if urlparse(self.path).path in BROWSER_ROUTES:
+            # `*`, not the Pages origin: the board is also opened from file://,
+            # which sends a null Origin.
+            self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
 
