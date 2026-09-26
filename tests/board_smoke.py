@@ -52,6 +52,11 @@ def shifted(case: dict, delta: float) -> dict:
         move(p["attributes"])
     for v in out["vehicles"]:
         move(v["attributes"])
+        # make_fixtures keeps only the fields compute_rows reads, so no sampled
+        # vehicle has `carriages` -- and the board paints the lead car number in
+        # the hero, on the map and in the terminus box. Give the stub one, rather
+        # than regenerating 28 frozen fixtures to exercise a display field.
+        v["attributes"].setdefault("carriages", [{"label": "3" + v["id"][-3:]}])
     out["slots"] = [[t + delta, tr] for t, tr in out["slots"]]
     return out
 
@@ -99,7 +104,10 @@ def dwell_scenario(browser, check) -> None:
     print(f"  hero: {label} / {big}  |  {page.inner_text('#heroSub')[:70]}")
     # .label is uppercased by CSS, so compare case-insensitively.
     check("a train at the platform is shown as such",
-          label.lower() == "train at the station", label)
+          label.lower().startswith("train")
+          and label.lower().endswith("at the station"), label)
+    check("and it is named, so the hero cannot be about a different train",
+          bool(re.search(r"\b3\d\d\d\b", label)), label)
     check("its dwell is counting in seconds",
           bool(re.fullmatch(r"\d+:\d\d", big)), big)
     check("the hero is marked as boardable now",
@@ -432,24 +440,32 @@ def served_scenario(browser, check) -> None:
         print(f"\n  serving web/ over HTTP on {port} (the deployed shape)")
         check("the self-score panel is shown when stats.json is reachable",
               not page.is_hidden("#hist"))
-        score = page.inner_text("#histScore")
-        print(f"  score: {score}")
+        summary = page.inner_text("#histSum").replace("\n", " ")
+        window = page.inner_text("#histWindow")
+        print(f"  score: {summary[:150]}")
         check("it reports the real caught count",
-              f"caught {stats['caught']}/{stats['of']}" in score, score)
+              f"{stats['caught']}" in summary and f"{stats['of']}" in summary,
+              summary[:80])
         check("platform wait is shown in minutes",
-              f"{stats['mean_platform_wait_s'] / 60:.1f} min" in score)
+              f"{stats['mean_platform_wait_s'] / 60:.1f} min" in summary)
         # Platform wait alone rewards dawdling, so the board has to show both.
         check("door-to-train is shown beside it",
-              "door-to-train" in score
-              and f"{stats['mean_door_to_train_s'] / 60:.1f} min" in score)
+              "boarding" in summary
+              and f"{stats['mean_door_to_train_s'] / 60:.1f} min" in summary)
         check("the window it scored is named",
-              f"{stats['window_days']}d to {stats['as_of']}" in score)
+              f"{stats['window_days']} day" in window and stats["as_of"] in window,
+              window)
         rows = page.inner_text("#histRows")
         check("every lead bin is rendered",
-              all(b["bin"] in rows for b in stats["by_lead"]),
+              all(b["bin"].replace("min", " min") in rows for b in stats["by_lead"]),
               f"{len(stats['by_lead'])} bins")
-        check("a bin shows its sample size and its p50",
-              f"n={stats['by_lead'][0]['n']}" in rows and "p50" in rows)
+        check("a bin shows its sample size", str(stats["by_lead"][0]["n"]) in rows)
+        # stats.json publishes err = predicted - actual, so a negative p50 is a
+        # train that came LATE. Printing the raw sign read as the opposite.
+        p50 = stats["by_lead"][0]["p50"]
+        check("and says late or early rather than a signed error",
+              f"{abs(p50)}s {'late' if p50 < 0 else 'early'}" in rows,
+              rows.replace("\n", " | ")[:100])
         page.close()
         httpd.shutdown()
 
@@ -515,20 +531,44 @@ def run(case_index: int, headed: bool) -> int:
         print(f"replaying {fixture.name}#{case_index} as now, from file://\n")
         hero = page.inner_text("#heroBig").strip()
         sub = page.inner_text("#heroSub").replace("\n", " ")
+        who = page.inner_text("#heroWho").replace("\n", " ")
         foot = page.inner_text("#foot")
-        print(f"  hero: {hero}  |  {sub[:90]}")
+        print(f"  hero: {hero}  |  {sub[:60]}  |  {who[:60]}")
         print(f"  foot: {foot[:130]}\n")
 
         check("the page loads with no script error", not errors, "; ".join(errors[:2]))
         check("a countdown or a due train is shown",
               bool(re.fullmatch(r"-?\d+:\d\d", hero) or hero == "due"), hero)
-        check("the band and the tier are named",
-              "±" in sub and any(s in sub for s in
-                                 ("mbta", "departed", "berthed", "schedule")))
+        # No symmetric +/- : lo and hi are fitted q10/q90 offsets that sit well
+        # off centre, so one number for both sides invented an early side.
+        check("the hero quotes a clock time and no invented symmetric band",
+              "±" not in sub and bool(re.search(r"\d+:\d\d", sub)), sub[:70])
+        # Where the train IS, read off data.line -- the array the map is drawn
+        # from -- not the tier that produced the prediction.
+        check("it says where that train actually is", bool(who.strip()), who[:70])
+        veh = page.evaluate("data.next && data.next.vehicle")
+        if veh:
+            check("and names the train, so hero and map cannot disagree",
+                  bool(re.search(r"\b3\d\d\d\b", page.inner_text("#heroLabel"))),
+                  page.inner_text("#heroLabel"))
         check("the feed reads live, not stale", foot.startswith("live"))
-        check("the median headway came from model.json", "median headway" in foot)
+        check("the headway is stated as what it means for the rider",
+              "a train every" in foot, foot[-60:])
         check("following trains are listed",
               page.eval_on_selector_all(".row", "e => e.length") >= 1)
+        # Four rows was a cap, not a limit of the data: the list scrolls now, and
+        # the timetable tier reaches an hour out.
+        check("the list is not capped at four trains",
+              page.evaluate("(data.following || []).length") >= 4,
+              f"{page.evaluate('(data.following || []).length')} rows")
+        vals = page.eval_on_selector_all(
+            "#following .row:not(.skipped) .v", "es => es.map(e => e.textContent)")
+        check("later trains are counted in whole minutes, not ticking seconds",
+              bool(vals) and all(re.search(r"\u00b7\s*(due|\d+ min)", v) for v in vals),
+              " | ".join(v.strip() for v in vals[:2]))
+        check("a later train can be armed from its own row",
+              page.eval_on_selector_all("#following button[data-arm]",
+                                        "e => e.length") >= 1)
         check("the line map drew trains",
               page.eval_on_selector_all(".train", "e => e.length") >= 1)
         check("the five stops below the terminus box are drawn",
@@ -588,7 +628,11 @@ def run(case_index: int, headed: bool) -> int:
                   len({q["body"] for q in cmds}) == 1,
                   " | ".join(sorted({str(q["body"]) for q in cmds})))
         check("the alert stays armed in the footer",
-              "alert armed" in page.inner_text("#foot"))
+              "leave alert set" in page.inner_text("#foot"))
+        # One alert at a time: ntfy cannot withdraw a scheduled publish, so a
+        # second arm would add a stale "Leave now" rather than move the first.
+        check("and no other row offers to arm a second one",
+              page.eval_on_selector_all("button[data-arm]", "e => e.length") == 1)
         # The documented degradation: from file:// stats.json cannot be fetched at
         # all, so the panel hides rather than showing an empty box.
         check("the self-score panel hides itself from file://",

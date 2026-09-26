@@ -325,6 +325,11 @@ exports.skippedSlotTimes = skippedSlotTimes;
 const API = "https://api-v3.mbta.com";
 const ROUTES = "Green-B,Green-C,Green-D,Green-E";
 const POLL_MS = 10000;          // the Mac server refreshed on a 10 s cache too
+// How far ahead the LIST reaches. The model's horizon_s is what the prediction is
+// fitted to quote; the list is a scrollable answer to "go now, or after the next
+// one", which is a question about the next hour. Past ~13 min every row is
+// timetable-plus-bias either way, and the row says so.
+const LIST_HORIZON_S = 5400;
 const MODEL_RECHECK_MS = 3600000;
 const QS = [0.1, 0.5, 0.9];     // mirrors service.etas' default quantiles
 // The default walk is published in model.json so the board and the backend that
@@ -556,8 +561,13 @@ function buildStatus(now, snap, model, rows, berths, here, recent, line,
     // costs the notifier its recovery.
     next: nxt && {eta: nxt.eta, lo: nxt.lo, hi: nxt.hi, source: nxt.source,
                   backed: nxt.backed, vehicle: nxt.vehicle},
-    following: rows.slice(1, 5).map(r => ({eta: r.eta, source: r.source,
-                                           skipped: r.skipped})),
+    // Every row, not the first four: the list scrolls now. Each one carries what
+    // armAlert needs -- `lo` is the leave time and `vehicle` is the only thing that
+    // tells a prediction flap from a no-show -- because the bell is on the rows too,
+    // and a later train is exactly the one you want to be told about.
+    following: rows.slice(1).map(r => ({eta: r.eta, lo: r.lo, hi: r.hi,
+                                       source: r.source, backed: r.backed,
+                                       vehicle: r.vehicle, skipped: r.skipped})),
     upstream: upstreamState({t: now, vehicles: snap.vehicles}, model),
     line: line,
     stops: model.need("glx").map(g => g[0]),
@@ -651,7 +661,8 @@ function start(onData, onError) {
       }
       // walk 0: the board draws its own leave time from `lo`, as /status did.
       const rows = computeRows(snap.t, snap.preds, snap.vehicles, model, 0, QS,
-                               model.need("horizon_s"), berths, slots, skipped);
+                               Math.max(model.need("horizon_s"), LIST_HORIZON_S),
+                               berths, slots, skipped);
       onData(Object.assign(
         buildStatus(snap.t, snap, model, rows, berths, here,
                     arrivals.recent.slice(-5), lineMap(snap, model), alerts, slots),
