@@ -22,11 +22,17 @@ MAGOUN_IN = "70508"
 
 
 def snapshots(day: str) -> Iterator[dict]:
+    import rollup
     f = LIVE / f"rt-{day}.jsonl.gz"
+    if not f.exists():
+        f = LIVE / f"rt-{day}.delta.jsonl.gz"
     with gzip.open(f, "rt") as fh:
-        for line in fh:
-            if line.strip():
-                yield json.loads(line)
+        if ".delta." in f.name:
+            yield from rollup.from_delta(fh)
+        else:
+            for line in fh:
+                if line.strip():
+                    yield json.loads(line)
 
 
 def to_v3(snap: dict) -> dict:

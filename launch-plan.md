@@ -163,7 +163,53 @@ Pooling them would bias the very calibration Phase 1 exists to produce.
       so unlike schedules this is recoverable — but not conveniently.
 - [ ] **Exclude 2026-09-26 → 2026-10-05 when fitting** anything but run times.
 
-### Storage
+### Storage format: why JSONL, and where it is wrong
+
+Measured on a real day (320,622 prediction rows, 243,368 vehicle rows):
+
+| format | MB/day | vs current |
+|---|---|---|
+| JSONL + gzip (current capture) | 9.63 | 1.0× |
+| parquet + snappy | 3.18 | 3.0× |
+| parquet + zstd | 2.18 | 4.4× |
+| parquet + zstd, sorted by key | 2.09 | 4.6× |
+| **delta JSONL + gzip** (`rollup.compact`) | **1.95** | **4.9×** |
+
+**Raw protobuf is not an option.** The unfiltered feed is ~890 KB per poll, so
+storing it verbatim is ~5 GB/day. Filtering to the corridor is what makes this
+9.6 MB in the first place; the format is not where the volume comes from.
+
+**JSONL is right for the capture tier**, for reasons unrelated to size:
+- Append-only and crash-safe — every line is independent, so a kill loses at most
+  one line. Parquet is columnar and batch-oriented: writing hourly means holding an
+  hour in memory and losing it on a crash.
+- Schema moved three times in one day (`unc`, `rel`, `alerts` all added mid-stream).
+  Parquet wants a fixed schema per file.
+- `zcat | grep` answered real questions repeatedly during debugging.
+
+**JSONL is arguably wrong for the archive tier.** Delta-JSONL wins on size by 7%,
+which is noise, while parquet is **directly queryable** — polars can scan it
+without reconstructing snapshots. For the aggregate questions that make up most
+analysis, that matters far more than 0.14 MB/day.
+
+- [ ] Consider making the compacted form parquet rather than delta-JSONL. Same
+      size, far better for analysis; replay regroups rows by timestamp. Not urgent:
+      delta compaction is built, verified lossless, and in the daily job.
+
+### Compaction
+
+`rollup.py --compact` re-encodes finished days as hourly keyframes plus changes,
+**4.9×** smaller, and only replaces the original if the whole snapshot round-trips
+exactly. Two bugs were caught by that check before anything was overwritten:
+vehicles leaving the feed were never removed on reconstruction (silently dropping
+1,595 pairs from one day), and a hand-picked field list missed `veh`, which is null
+until a vehicle is assigned to a trip. The verifier now compares entire snapshots,
+not a chosen subset — the narrow check passed while losing data.
+
+With compaction, pruning can move from 30 days to 90 and a full year of raw costs
+~0.75 GB.
+
+### Storage volume
 
 Not a problem, and deliberately made bigger.
 

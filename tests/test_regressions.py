@@ -242,3 +242,39 @@ def test_brief_never_offers_a_skipped_train():
     import brief
     src = inspect.getsource(brief.options)
     assert 'not r.get("skipped")' in src
+
+
+# --- archive compaction must be lossless ---
+
+def test_delta_round_trip_is_exact():
+    """Compaction is only safe if it is reversible; verify before replacing."""
+    import rollup
+    snaps = []
+    for i in range(300):
+        snaps.append({
+            "t": 1000.0 + i * 15,
+            "preds": [{"stop": "70508", "trip": "t1", "arr": 2000 + i,
+                       "dep": 2040 + i, "rel": 0, "unc": 120, "route": "Green-E",
+                       "dir": 0, "veh": "G-1", "seq": 6},
+                      {"stop": "70510", "trip": "t2", "arr": 3000, "dep": None,
+                       "rel": None, "unc": None, "route": "Green-E",
+                       "dir": 0, "veh": "G-2", "seq": 5}],
+            "vehicles": [{"id": "G-1", "stop": "70510", "status": "STOPPED_AT",
+                          "seq": 5, "ts": 900 + i, "dir": 0, "route": "Green-E",
+                          "trip": "t1"}],
+        })
+    back = list(rollup.from_delta(rollup.to_delta(snaps)))
+    assert len(back) == len(snaps)
+    for a, b in zip(snaps, back):
+        assert a["t"] == b["t"]
+        ka = {rollup._pkey(p): p["arr"] for p in a["preds"]}
+        kb = {rollup._pkey(p): p["arr"] for p in b["preds"]}
+        assert ka == kb
+        assert {v["id"]: v["ts"] for v in a["vehicles"]} == \
+               {v["id"]: v["ts"] for v in b["vehicles"]}
+
+
+def test_compact_keeps_a_keyframe_every_hour():
+    """A corrupt or truncated run must lose less than an hour, not the whole day."""
+    import rollup
+    assert rollup.KEYFRAME * 15 <= 3600

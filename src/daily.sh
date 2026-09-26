@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.." || exit 1
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 echo "=== $(date -Iseconds) daily ==="
 uv run --quiet python src/snapshot_schedule.py
-uv run --quiet --with polars python src/rollup.py --prune 30
+uv run --quiet --with polars python src/rollup.py --compact --prune 90
 echo "--- regression tests ---"
 uv run --quiet --with pytest --with numpy --with polars python -m pytest tests/ -q
 echo "=== done ==="

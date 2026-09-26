@@ -30,8 +30,12 @@ def _schedule_slots() -> list[float]:
 
 def _snapshots(paths):
     for p in paths:
+        import rollup
         op = gzip.open if str(p).endswith(".gz") else open
         with op(p, "rt") as f:
+            if ".delta." in str(p):
+                yield from rollup.from_delta(f)
+                continue
             for line in f:
                 line = line.strip()
                 if line:
@@ -47,7 +51,7 @@ def score(walk: int = 390, band: int = 75, n: int = 10, paths=None,
     against MBTA predictions alone would understate the app, because the schedule
     is what carries the horizon beyond ~13 minutes.
     """
-    paths = paths or sorted(LIVE.glob("rt-*.jsonl.gz"))[-2:]
+    paths = paths or sorted(LIVE.glob("rt-*.jsonl*.gz"))[-2:]
     arrivals: list[tuple[float, str]] = []
     prev: dict[str, tuple] = {}
     preds: dict[str, list[tuple[float, float]]] = {}
