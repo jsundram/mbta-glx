@@ -328,8 +328,11 @@ def test_the_board_hands_off_on_the_command_topic_it_already_listens_to(w):
     board = (pathlib.Path(__file__).resolve().parent.parent
              / "web" / "board.html").read_text()
     assert "magoun.cmd" in board, "the bell must know the command topic"
-    assert "`arm ${Math.round(next.eta)}" in board
-    assert "/live-extras.json" not in board.split("armAlert")[0]
+    assert "body: `arm ${eta} ${veh}`" in board
+    # The handoff names the ARMED train, read back from storage -- not data.next,
+    # which walks onto the following train the moment this one arrives.
+    assert 'localStorage.getItem("magoun.armedEta")' in board.split("function handOff")[1]
+    assert "data.next" not in board.split("function handOff")[1].split("}")[0]
 
 
 def test_re_arming_the_same_train_does_not_reset_the_plan(w, feed):
@@ -486,3 +489,37 @@ def test_a_leave_now_a_few_seconds_late_still_fires(w, feed):
     feed.now += 60                             # a minute past lo - walk
     w.tick()
     assert feed.titles == ["Leave now"]
+
+
+# --- review: the handoff overwrote the plan it was meant to complement ---
+
+def test_the_bell_cannot_wipe_a_plan_the_rider_made(w, feed):
+    """`arm` built a fresh plan whenever it did not recognise the current one, and
+    a destination plan never carries armed_by. So a tablet left open destroyed the
+    morning brief's commitment -- dest, deadline, fired, left_at -- every 60 s."""
+    eta = feed.now + 900
+    p = arm(feed, eta, vehicle="G-10065")
+    p.update(dest="70199", deadline=feed.now + 3600, left_at=feed.now - 60,
+             fired={"leave": True})
+    watch.save(p)
+
+    w.on_command(f"arm {int(feed.now + 1200)} G-10199", {})
+
+    got = watch.load()
+    assert got["dest"] == "70199", "the errand outranks the bell"
+    assert got["deadline"] == p["deadline"]
+    assert got["fired"] == {"leave": True}, "it already told the rider to leave"
+    assert got["left_at"] == p["left_at"]
+    assert got["committed"]["target_eta"] == eta
+
+
+def test_the_bell_arms_again_once_that_plan_is_gone(w, feed):
+    """Refusing while a plan is active must not mean refusing forever."""
+    arm(feed, feed.now + 900, vehicle="G-10065")
+    p = watch.load(); p["dest"] = "70199"; watch.save(p)
+    w.on_command(f"arm {int(feed.now + 1200)} G-10199", {})
+    assert watch.load()["dest"] == "70199"
+
+    watch.STATE.unlink()                       # the plan expired, as tick does
+    w.on_command(f"arm {int(feed.now + 1200)} G-10199", {})
+    assert watch.load()["committed"]["vehicle"] == "G-10199"

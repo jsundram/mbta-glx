@@ -159,9 +159,16 @@ let data = null, lastOk = 0, version = null, dueLatch = null;
 
 // ---- push, with no backend involved ----
 // ntfy accepts cross-origin POSTs and will hold a message until a future time
-// (`At`). Publishing again with the same Sequence-ID replaces the pending one, so
-// this page can keep an alert current while it is open, and the alert still fires
-// after the page is closed. Verified: reschedule delivers exactly once.
+// (`At`), so the alert still fires after the page is closed.
+//
+// Sequence-ID does NOT replace the pending one -- measured against ntfy.sh, three
+// publishes with one Sequence-ID and one At deliver three times, and `delete`
+// publishes a message_delete event while the scheduled send still arrives. Both
+// are the ntfy app collapsing or dismissing a notification, not the server
+// rescheduling. So a scheduled alert cannot be refined from a page: this arms
+// exactly once, and refining it is watch.py's job (see web/board.html, which
+// hands the train over on the command topic; this page is the server-rendered
+// original and has no handoff).
 const NTFY = localStorage.getItem("magoun.ntfy") || "";
 const SEQ = "magoun-leave";
 // Armed state is persisted: an always-on tablet dashboard will be reloaded by the
@@ -182,9 +189,8 @@ async function keepAwake() {
 }
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
-  // Coming back from sleep: the pending alert may be stale, so refresh at once.
+  // Coming back from sleep: repaint against fresh data at once.
   keepAwake();
-  window._lastArm = 0;
   poll();
 });
 
@@ -200,6 +206,7 @@ async function armAlert(next) {
   const walk = +(localStorage.getItem("magoun.walk") || (data && data.walk) || 0);
   if (!walk) return;
   const leaveAt = Math.max(Math.round(next.lo - walk), Math.round(Date.now()/1000) + 11);
+  if (armed) return;      // a second publish adds a delivery, it does not replace
   try {
     await fetch(`https://ntfy.sh/${NTFY}`, {
       method: "POST",
@@ -283,17 +290,14 @@ function paint() {
     `<div class="alert"><b>${a.effect.replace("_"," ")}${
       a.lifecycle === "UPCOMING" ? " · upcoming" : ""}</b>${
       (a.header || a.short || "").slice(0, 190)}</div>`).join("");
-  // While the page is open, keep any armed alert pointed at the current ETA.
-  // Once the alert has fired there is nothing left to refine, so disarm.
+  // Once the armed train has gone, disarm. There is no re-pointing to do: a
+  // scheduled ntfy message cannot be moved, only added to.
   if (armed) {
     const target = +(localStorage.getItem("magoun.armedEta") || 0);
     if (target && now > target + 60) {
       armed = false;
       localStorage.removeItem("magoun.armed");
       localStorage.removeItem("magoun.armedEta");
-    } else if (data.next && Date.now()/1000 - (window._lastArm || 0) > 60) {
-      window._lastArm = Date.now()/1000;
-      armAlert(data.next);
     }
   }
   drawMap();

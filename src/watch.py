@@ -135,18 +135,34 @@ class Watcher:
         open sends this every minute, and a fresh plan each time would forget that
         leave-now had already fired, forget an adopted train, and reset the miss
         count -- so the tablet being open would break the notifier watching.
+
+        And a plan the rider made deliberately outranks the bell. `plan park 09:00`
+        carries a destination, a deadline and possibly a leave-now already sent;
+        the bell carries a train. Because a destination plan never has `armed_by`,
+        the refresh below could never match one, so the arm fell through and built
+        a bare plan over the top of it -- silently, and once a minute for as long
+        as a tablet was open, which made a destination plan impossible to keep.
         """
         p = load()
+        if p.get("dest") and p.get("committed"):
+            log(f"  (arm {fmt(eta)} ignored: a plan for {p['dest']} is active)")
+            return p
         com = (p or {}).get("committed") or {}
-        same = p.get("armed_by") == "board" and com and (
+        same = com and (
             (vehicle and com.get("vehicle") == vehicle)
             or abs(com.get("target_eta", 0) - eta) <= MATCH)
         if same:
-            com["target_eta"] = eta
-            if vehicle:
+            # A repeat arm is a heartbeat, not new information. The board sends the
+            # train it armed, unchanged, because ntfy does not replay for anonymous
+            # topics and a handoff lost while the notifier was down has no other
+            # way back. So the eta here is the ORIGINAL one and the notifier's own
+            # tracking is the better number -- adopting it would drag a train that
+            # has since slipped back to where it was first seen.
+            com.setdefault("vehicle", None)
+            if vehicle and not com["vehicle"]:
                 com["vehicle"] = vehicle
             com["misses"] = 0
-            p["deadline"] = eta + 1800
+            p["deadline"] = max(p.get("deadline", 0), com["target_eta"] + 1800)
             save(p)
             return p
         p = {"dest": None, "deadline": eta + 1800, "conf": None, "walk": WALK,

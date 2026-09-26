@@ -173,15 +173,16 @@ let data = null, lastOk = 0, version = null, dueLatch = null;
 // client-side tidying in the app, not server-side scheduling, which is why this
 // once looked like "reschedule delivers exactly once" from a phone.
 //
-// So every re-arm is another real push. Two consequences, both handled below:
-// re-arm only when the leave time has actually moved (ARM_MOVE), and hand the
-// alert to the notifier, which can refine one alert instead of queueing more.
+// So a scheduled alert cannot be refined from here at ALL: a second publish adds
+// a delivery and the first cannot be withdrawn. This page therefore schedules
+// exactly ONE push, aimed where the train was when the bell was tapped, as the
+// fallback for a notifier that is not running -- and hands the train to the
+// notifier, which is the only place refinement can actually happen.
 const NTFY = localStorage.getItem("magoun.ntfy") || "";
 // The command topic watch.py listens on. Optional: without it the bell behaves
 // exactly as before -- a scheduled push and no refinement once the page is gone.
 const NTFY_CMD = localStorage.getItem("magoun.cmd") || "";
 const SEQ = "magoun-leave";
-const ARM_MOVE = 60;      // seconds the leave time must move to justify a new push
 // Armed state is persisted: an always-on tablet dashboard will be reloaded by the
 // browser under memory pressure, and losing the arm silently would stop the
 // refinement that is the whole reason for leaving it open.
@@ -220,23 +221,19 @@ async function armAlert(next) {
   }
   const walk = Magoun.walkSeconds();
   const now = Math.round(Date.now()/1000);
-  const target = Math.round(next.lo - walk);
-  const leaveAt = Math.max(target, now + 11);
+  const leaveAt = Math.max(Math.round(next.lo - walk), now + 11);
 
-  // Hand the train to the notifier on every pass, armed or not. `arm` is
-  // idempotent there, and it is the only thing that keeps refining after this
-  // page closes -- including once leave-now has gone out, which is exactly when
-  // the mid-walk adjust and the recovery matter.
-  handOff(next);
-
-  // The scheduled push below is the fallback for when nothing is running to
-  // receive that. Every publish is a real delivery, so only pay for one when it
-  // buys something. Two cases where it does not: the leave time has not moved,
-  // and the leave moment has already gone -- past it the push has fired, and
-  // re-arming off the `now + 11` clamp buzzes again every minute until the train
-  // arrives. Neither is refinement; both are just noise.
-  const last = +(localStorage.getItem("magoun.armedLeaveAt") || 0);
-  if (armed && last && (target <= now || Math.abs(leaveAt - last) < ARM_MOVE)) return;
+  // Already armed? Then this is the heartbeat, not a new alert. Re-send the
+  // handoff -- ntfy does not replay for anonymous topics, so a handoff sent while
+  // the notifier was down has no other way back -- and touch nothing else.
+  //
+  // The scheduled push is NOT re-pointed, because it cannot be: a second publish
+  // does not replace the first, it adds one, and the first cannot be cancelled.
+  // Re-arming a moved leave time would deliver a "Leave now" at the stale time
+  // and another at the right one. One push, aimed where the train was when the
+  // bell was tapped, is the honest fallback; refining it is the notifier's job
+  // and the only place it can actually be done.
+  if (armed) return handOff();
   try {
     await fetch(`https://ntfy.sh/${NTFY}`, {
       method: "POST",
@@ -252,7 +249,8 @@ async function armAlert(next) {
     armed = true;
     localStorage.setItem("magoun.armed", "1");
     localStorage.setItem("magoun.armedEta", String(Math.round(next.eta)));
-    localStorage.setItem("magoun.armedLeaveAt", String(leaveAt));
+    localStorage.setItem("magoun.armedVeh", next.vehicle || "-");
+    handOff();
     paint();
   } catch (e) { alert("could not set the alert: " + e.message); }
 }
@@ -260,12 +258,23 @@ async function armAlert(next) {
 // `arm <eta> [vehicle]` on the command topic watch.py already subscribes to. No
 // endpoint, no CORS, nothing for the backend to serve -- the same reply path the
 // notification buttons use, in the other direction.
-function handOff(next) {
+//
+// It names the train that was ARMED, from storage, not whatever is currently next.
+// Those diverge the moment the armed train arrives or slips past the one behind
+// it, and handing over `data.next` would walk the notifier's commitment onto a
+// different train once a minute -- resetting the fact that leave-now had fired,
+// and that the rider had said they were on their way. The notifier does the
+// tracking; this only says which train, and says it again in case the first was
+// sent while nothing was listening.
+function handOff() {
   if (!NTFY_CMD) return;
+  const eta = +(localStorage.getItem("magoun.armedEta") || 0);
+  if (!eta) return;
+  const veh = localStorage.getItem("magoun.armedVeh") || "-";
   fetch(`https://ntfy.sh/${NTFY_CMD}`, {
     method: "POST",
     headers: {"Priority": "min", "Title": "cmd"},
-    body: `arm ${Math.round(next.eta)} ${next.vehicle || "-"}`,
+    body: `arm ${eta} ${veh}`,
   }).catch(() => { /* the scheduled push is the fallback for exactly this */ });
 }
 
@@ -276,18 +285,26 @@ async function cancelAlert() {
   try {
     await fetch(`https://ntfy.sh/${NTFY}/${SEQ}/delete`);
   } catch (e) { /* the alert simply stays scheduled */ }
+  disarm();
+  paint();
+}
+
+// Drop the armed state AND tell the notifier. Both halves matter: the notifier's
+// plan outlives this page by design, so a page that forgets locally and says
+// nothing leaves it tracking a train the rider has already boarded -- it then
+// misses that train for 240 s, adopts the one behind it, and pushes about it,
+// once per headway until the plan expires.
+function disarm() {
   if (NTFY_CMD) {
-    try {
-      await fetch(`https://ntfy.sh/${NTFY_CMD}`, {
-        method: "POST", headers: {"Priority": "min", "Title": "cmd"},
-        body: "cancel"});
-    } catch (e) { /* the notifier keeps watching; tap Cancel on its next push */ }
+    fetch(`https://ntfy.sh/${NTFY_CMD}`, {
+      method: "POST", headers: {"Priority": "min", "Title": "cmd"},
+      body: "cancel",
+    }).catch(() => { /* tap Cancel on the notifier's next push instead */ });
   }
   armed = false;
   localStorage.removeItem("magoun.armed");
   localStorage.removeItem("magoun.armedEta");
-  localStorage.removeItem("magoun.armedLeaveAt");
-  paint();
+  localStorage.removeItem("magoun.armedVeh");
 }
 
 const pad = n => String(Math.floor(n)).padStart(2, "0");
@@ -344,16 +361,14 @@ function paint() {
     `<div class="alert"><b>${a.effect.replace("_"," ")}${
       a.lifecycle === "UPCOMING" ? " · upcoming" : ""}</b>${
       (a.header || a.short || "").slice(0, 190)}</div>`).join("");
-  // While the page is open, keep any armed alert pointed at the current ETA.
-  // Once the alert has fired there is nothing left to refine, so disarm.
+  // The armed train has come and gone: the rider is on it, or it is moot either
+  // way. Disarm, and say so, or the notifier keeps working on a finished trip.
   if (armed) {
     const target = +(localStorage.getItem("magoun.armedEta") || 0);
     if (target && now > target + 60) {
-      armed = false;
-      localStorage.removeItem("magoun.armed");
-      localStorage.removeItem("magoun.armedEta");
-      localStorage.removeItem("magoun.armedLeaveAt");
+      disarm();
     } else if (data.next && Date.now()/1000 - (window._lastArm || 0) > 60) {
+      // Re-send the handoff. armAlert schedules nothing a second time.
       window._lastArm = Date.now()/1000;
       armAlert(data.next);
     }

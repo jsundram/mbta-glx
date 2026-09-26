@@ -197,14 +197,17 @@ def run(case_index: int, headed: bool) -> int:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not headed)
         page = browser.new_page()
-        # Armed before the page opens: this is the tablet that has been sitting
-        # there since breakfast, not a fresh visit.
+        # Not armed: the bell is tapped below, because arming and then holding an
+        # alert are different behaviours now and the difference is the whole point.
+        # A scheduled ntfy message cannot be re-pointed, so the page arms ONCE and
+        # the notifier does the refining -- an already-armed page that published
+        # again would be adding a second delivery, not moving the first.
         page.add_init_script(f"""
           localStorage.setItem("magoun.ntfy", "smoke-test-topic");
           localStorage.setItem("magoun.cmd", "smoke-test-cmd");
-          localStorage.setItem("magoun.armed", "1");
-          localStorage.setItem("magoun.armedEta", "{int(time.time()) + 3600}");
           localStorage.setItem("magoun.walk", "{WALK_S}");
+          localStorage.removeItem("magoun.armed");
+          localStorage.removeItem("magoun.armedEta");
           localStorage.removeItem("magoun.berths");
         """)
         stub(page, live)
@@ -249,8 +252,13 @@ def run(case_index: int, headed: bool) -> int:
         check("the schedule is cached per service day",
               any(k.startswith("magoun.sched.") for k in page.evaluate(
                   "Object.keys(localStorage)")))
+        check("nothing is pushed until the rider arms something", not posts,
+              f"{len(posts)} posts before the bell was tapped")
+        page.click("#bell")
+        page.wait_for_timeout(2000)
         sched = [q for q in posts if q["at"]]
-        check("the armed alert was posted on the first paint", len(sched) >= 1)
+        check("tapping the bell schedules the fallback alert", len(sched) == 1,
+              f"{len(sched)} scheduled posts")
         if sched:
             at = int(sched[0]["at"])
             lo = json.loads(page.evaluate("JSON.stringify(data.next)"))["lo"]
@@ -280,14 +288,19 @@ def run(case_index: int, headed: bool) -> int:
         # scheduled leave-now, and the `arm` command.
         leave = [q for q in posts if q["at"]]
         cmds = [q for q in posts if "smoke-test-cmd" in (q["url"] or "")]
-        check("it does not queue a second alert for an unchanged leave time",
-              len(leave) == 1, f"{len(leave)} scheduled posts in {REARM_WAIT_S + 6}s")
-        check("the train is handed to the notifier on the command topic",
-              len(cmds) >= 1, f"{len(cmds)} command posts")
+        check("an armed page never schedules a second alert",
+              len(leave) == 1, f"{len(leave)} scheduled posts in {REARM_WAIT_S + 8}s")
+        check("but it keeps handing the train to the notifier",
+              len(cmds) >= 2, f"{len(cmds)} command posts")
         if cmds:
             check("the handoff names the train as an epoch",
                   re.fullmatch(r"arm \d{10} \S+", cmds[0]["body"] or ""),
                   str(cmds[0]["body"]))
+            # Not data.next: once the armed train arrives, next is the one behind
+            # it, and handing THAT over walks the notifier onto a different train.
+            check("every handoff names the same train",
+                  len({q["body"] for q in cmds}) == 1,
+                  " | ".join(sorted({str(q["body"]) for q in cmds})))
         check("the alert stays armed in the footer",
               "alert armed" in page.inner_text("#foot"))
         # The documented degradation: from file:// stats.json cannot be fetched at
