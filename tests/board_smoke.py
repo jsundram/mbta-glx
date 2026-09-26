@@ -107,6 +107,139 @@ def dwell_scenario(browser, check) -> None:
     page.close()
 
 
+def _case_with_a_skip():
+    """A fixture whose skip set actually produces a 'not stopping here' row.
+
+    Synthesised by make_fixtures, not sampled: skips are ~10/day system-wide and
+    the contract test would otherwise never see the tier (invariant 7's shape).
+    """
+    for f in sorted((ROOT / "tests" / "fixtures").glob("cases-*.json")):
+        for i, c in enumerate(json.loads(f.read_text())):
+            if c.get("skipped") and any(r.get("skipped") for r in c["expected"]):
+                return c, f"{f.name}#{i}"
+    return None, None
+
+
+def skip_scenario(browser, check) -> None:
+    """M4's done-when, as far as a fixture can take it: a skipped train struck
+    through on the board.
+
+    The whole path, not just the CSS -- the board fetches <backend_url>/skips,
+    the trip ids come back, computeRows turns the matching schedule slots into
+    'not stopping here' rows, and the stylesheet strikes them out. Nothing else
+    checks that the endpoint's answer reaches the screen; the contract test stops
+    at the rows, and until now a deleted rule or a renamed field would have gone
+    unnoticed.
+
+    A real MBTA skip is still unobserved. This proves the board can show one.
+    """
+    case, index = _case_with_a_skip()
+    if case is None:
+        check("a fixture carries a skipped train", False)
+        return
+    live = shifted(case, time.time() - case["now"] + 30)
+    consts = json.loads((ROOT / "web" / "model.json").read_text())["constants"]
+    url = consts["backend_url"] + "/skips"
+    host = re.escape(url.split("/")[2])
+
+    page = browser.new_page()
+    page.add_init_script(f"""localStorage.setItem("magoun.walk", "{WALK_S}");
+                             localStorage.removeItem("magoun.berths");""")
+    stub(page, live)
+    page.route(re.compile(r"ntfy\.sh"), lambda r: r.fulfill(status=200, json={}))
+    served = []
+
+    def backend(route):
+        u = route.request.url
+        served.append(u)
+        body = ({"as_of": time.time(), "stale_after_s": 600} if u.endswith("/capture")
+                else {"as_of": time.time(), "trips": case["skipped"], "ttl_s": 60})
+        route.fulfill(status=200, content_type="application/json",
+                      body=json.dumps(body))
+
+    page.route(re.compile(host), backend)
+    page.goto(BOARD)
+    page.wait_for_timeout(6000)
+
+    print(f"\n  replaying {index} with the skip endpoint answering")
+    check("the board asked the published endpoint for the skip set",
+          any(u.endswith("/skips") for u in served), f"{len(served)} backend requests")
+    n = page.eval_on_selector_all(".row.skipped", "e => e.length")
+    check("a skipped train is listed", n >= 1, f"{n} skipped rows")
+    if n:
+        print("  row:", page.inner_text(".row.skipped").replace("\n", " "))
+        deco = page.eval_on_selector(
+            ".row.skipped .v", "e => getComputedStyle(e).textDecorationLine")
+        check("and it is struck through", "line-through" in deco, deco)
+
+    # The other half: the endpoint is the only source, so losing it must lose the
+    # strikethrough and nothing else. An unreachable Mac is the normal case.
+    page2 = browser.new_page()
+    page2.add_init_script(f"""localStorage.setItem("magoun.walk", "{WALK_S}");
+                              localStorage.removeItem("magoun.berths");""")
+    stub(page2, live)
+    page2.route(re.compile(r"ntfy\.sh"), lambda r: r.fulfill(status=200, json={}))
+    page2.route(re.compile(host), lambda r: r.abort())
+    errs = []
+    page2.on("pageerror", lambda e: errs.append(str(e)[:150]))
+    page2.goto(BOARD)
+    page2.wait_for_timeout(6000)
+    check("with the endpoint unreachable the board still paints",
+          bool(page2.inner_text("#heroBig").strip()) and not errs,
+          "; ".join(errs[:2]))
+    check("and simply shows no skipped train",
+          page2.eval_on_selector_all(".row.skipped", "e => e.length") == 0)
+    page.close()
+    page2.close()
+
+
+def capture_scenario(browser, check) -> None:
+    """A dead archiver has to be visible, and an unreachable one must not look
+    like a dead one.
+
+    An un-captured day cannot be recovered -- the v3 /schedules endpoint serves
+    about eight days back and nothing else keeps them -- so launch-plan.md calls
+    this the top failure mode. Nothing anywhere used to say a word about it.
+    """
+    fixture = sorted((ROOT / "tests" / "fixtures").glob("cases-*.json"))[0]
+    case = json.loads(fixture.read_text())[0]
+    live = shifted(case, time.time() - case["now"] + 30)
+    host = re.escape(json.loads((ROOT / "web" / "model.json").read_text())
+                     ["constants"]["backend_url"].split("/")[2])
+
+    def run(capture_body, label):
+        page = browser.new_page()
+        page.add_init_script(f"""localStorage.setItem("magoun.walk", "{WALK_S}");
+                                 localStorage.removeItem("magoun.berths");""")
+        stub(page, live)
+        page.route(re.compile(r"ntfy\.sh"), lambda r: r.fulfill(status=200, json={}))
+        page.route(re.compile(host), lambda r: (
+            r.abort() if capture_body is None else
+            r.fulfill(status=200, content_type="application/json",
+                      body=json.dumps(capture_body if r.request.url.endswith("/capture")
+                                      else {"as_of": time.time(), "trips": [],
+                                            "ttl_s": 60}))))
+        page.goto(BOARD)
+        page.wait_for_timeout(6000)
+        foot = page.inner_text("#foot")
+        page.close()
+        print(f"  {label}: {foot[:120]}")
+        return foot
+
+    print("\n  the archiver's heartbeat, as the footer reports it")
+    fresh = run({"as_of": time.time() - 20, "stale_after_s": 600}, "writing")
+    check("a live archiver says nothing", "archiver" not in fresh.lower(), fresh[:80])
+
+    dead = run({"as_of": time.time() - 4000, "stale_after_s": 600}, "silent 66m")
+    check("a silent archiver is called out", "archiver silent" in dead.lower(), dead[:90])
+    check("and it says data is being lost", "losing data" in dead.lower())
+
+    gone = run(None, "backend unreachable")
+    check("an unreachable backend is NOT reported as a dead archiver",
+          "archiver" not in gone.lower(),
+          "off the tailnet must not look like data loss: " + gone[:80])
+
+
 def upgrade_scenario(browser, check) -> None:
     """A board that was set up before the handoff existed.
 
@@ -361,6 +494,8 @@ def run(case_index: int, headed: bool) -> int:
               page.is_hidden("#hist"))
         dwell_scenario(browser, check)
         upgrade_scenario(browser, check)
+        skip_scenario(browser, check)
+        capture_scenario(browser, check)
         served_scenario(browser, check)
         browser.close()
 

@@ -66,6 +66,12 @@ uv run --with numpy python tests/live_notifier.py
   a real no-show, so it names what it could *not* exercise rather than reporting a
   quiet window as success.
 
+The backend serves the board two things it cannot fetch, both allowlisted in
+`server.BROWSER_ROUTES` and both reached at `constants.backend_url`:
+`/skips` (the protobuf-only skip set) and `/capture` (when the archive was last
+appended to, so a dead archiver is visible rather than silent). Reachable over
+Tailscale; unreachable is a normal state and must not be rendered as failure.
+
 `web/` **is** the static origin — Pages uploads it as-is. `publish.py` moves files
 and never derives them; `fit.py` and `stats.py` are what write `data/`.
 
@@ -84,7 +90,9 @@ and never derives them; `fit.py` and `stats.py` are what write `data/`.
    passed while losing 1,595 rows. `archive.py` / `rollup.compact_parquet` only
    delete the original after a full-snapshot comparison.
 5. **Schema changes must be additive.** `rollup.py` reads archives written by
-   older code, and raw is pruned at 90 days.
+   older code, and the uncompacted `rt-*.jsonl.gz` is pruned at 90 days. The
+   *compacted* `data/live/day=*` is never pruned by anything, despite what
+   architecture.md used to say — so a reader of any age may turn up.
 6. **The archiver is the one process that must not lose data.** It writes plain
    appendable JSONL; compaction happens later on closed days. Do not make it
    clever.

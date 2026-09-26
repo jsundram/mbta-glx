@@ -118,7 +118,7 @@ def test_fixtures_are_self_contained():
 WEB = pathlib.Path(__file__).resolve().parent.parent / "web"
 CONSTANTS = {"veto_window_s", "stale_vehicle_s", "dedupe_s", "min_gap_s",
              "horizon_s", "band_s", "stops", "glx", "alert_corridor", "walk_s",
-             "extras_url"}
+             "backend_url"}
 
 
 def test_web_model_is_the_published_copy():
@@ -162,7 +162,7 @@ def test_the_walk_has_exactly_one_source():
         cfg["walk_s"], "model.json publishes a different walk than config.json"
 
 
-def test_the_skip_endpoint_has_exactly_one_source():
+def test_the_backend_url_has_exactly_one_source():
     """Same pipe as the walk: data/config.json -> fit.py -> model.json constants.
 
     Without this, renaming the tailnet host and editing config without a refit
@@ -173,10 +173,10 @@ def test_the_skip_endpoint_has_exactly_one_source():
     """
     cfg = json.loads((service.ROOT / "data" / "config.json").read_text())
     published = json.loads((WEB / "model.json").read_text())["constants"]
-    assert "extras_url" in cfg, \
-        "data/config.json lost extras_url; fit.py would publish an empty endpoint"
-    assert published["extras_url"] == cfg["extras_url"], (
-        "model.json publishes a different skip endpoint than config.json -- "
+    assert "backend_url" in cfg, \
+        "data/config.json lost backend_url; fit.py would publish an empty backend"
+    assert published["backend_url"] == cfg["backend_url"].rstrip("/"), (
+        "model.json publishes a different backend than config.json -- "
         "run src/fit.py after editing the config")
 
 

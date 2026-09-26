@@ -82,6 +82,26 @@ single rule that keeps a JS frontend from becoming a second implementation.
 `lo` is the quantile the rider acts on. `eta` is the median. Never quote `eta` as
 the leave time.
 
+### `GET /capture` — the archiver's heartbeat
+
+```jsonc
+{ "as_of": 1790450599, "stale_after_s": 600 }
+```
+
+The mtime of the newest `rt-*.jsonl.gz`, which is exact: the archiver opens,
+appends and closes once per snapshot. The newest file rather than today's by
+name, or the few seconds after midnight would read as a dead archiver.
+
+The second entry in `BROWSER_ROUTES`, and it passes the same test as the first —
+a browser cannot know when a file on this Mac was last written. It is liveness,
+not computed rows, so the static property is untouched: with the backend
+unreachable the board says nothing and works exactly as before. That third state
+matters. **Unreachable must not look like dead**, or the warning is worse than
+useless — a phone off the tailnet is the normal case.
+
+`600 s` against a 15 s write cadence, and the largest ordinary gap measured
+across a 15-hour day was 18 s.
+
 ### `GET /skips` — what the browser cannot fetch
 
 ```jsonc
@@ -137,7 +157,10 @@ unc_s)`. ~0.68 MB/day. Never pruned.
 ### `data/live/day=YYYY-MM-DD/` — compacted archive
 
 `preds.parquet`, `vehicles.parquet`, `meta.json`. Delta-encoded, times as offsets,
-~1.25 MB/day, directly queryable by DuckDB. Pruned at 90 days.
+~1.25 MB/day (measured), directly queryable by DuckDB. **Never pruned** — this
+said "pruned at 90 days" and that was wrong. `rollup.py --prune 90` deletes the
+*uncompacted* `rt-*.jsonl.gz` only, and only once `data/pairs` holds that day, so
+nothing has ever deleted a compacted day. See §5.
 
 ---
 
@@ -355,12 +378,20 @@ CORS gating checked against the allowlist for every route rather than the three
 anyone thought to name. Injecting CORS everywhere fails three of its tests; adding
 a field to the response fails another.
 
-**The feature, not yet.** Skips are ~10/day system-wide and rare at Magoun, and
-the marker lands ~2 min before the scheduled arrival. The row-level behaviour is
-already pinned — `make_fixtures` synthesises a skipped case precisely because
-sampling never catches one — but nobody has watched a real train struck through.
+**The feature, demonstrated on a synthesised skip.** `board_smoke.py` replays the
+fixture that carries one, stubs the endpoint with its trip ids, and checks the
+whole path: the board asks `<backend_url>/skips`, the ids come back, the matching
+schedule slots become "not stopping here" rows, and `getComputedStyle` reports
+`line-through`. The other half of the same scenario aborts the endpoint and
+checks the board still paints and simply shows no skipped train. Nothing used to
+cover any of that — the contract test stops at the rows, so a deleted CSS rule or
+a renamed field would have gone unnoticed.
 
-**Done when:** a skipped train is struck through on the static board.
+**Still unobserved: a real one.** Skips are ~10/day system-wide, rare at Magoun,
+and the marker lands ~2 min before the scheduled arrival.
+
+**Done when:** a skipped train is struck through on the static board. Done for a
+synthesised skip, end to end in a browser; a live one is a matter of waiting.
 
 ### M5 — Backend notifier — **done**
 
@@ -462,7 +493,7 @@ Still unexercised live: a **skip** (protobuf-only, ~10/day system-wide) and a
 | decision | options | notes |
 |---|---|---|
 | always-on host | iPad kiosk · Raspberry Pi · fly.io / VPS | **Deferred, not closed** — M5 ships on this Mac, see below. |
-| archive retention | prune 90d · keep forever | compaction makes a full year ~0.46 GB; keeping everything is now affordable |
+| ~~archive retention~~ | **already keep forever** | Measured, not estimated. Nothing prunes the compacted archive; `--prune 90` only drops the uncompacted JSONL, and only once pairs exists for that day. Growth is 1.25 MB/day compacted + 1.41 MB/day pairs = **~1 GB/year**, plus ~330 MB of rolling uncompacted. The doc's old 0.46 GB/year counted the compacted half only. At that size the question is not disk, it is that `data/live` sits in Dropbox and churns — the row below. |
 | `data/live` location | inside Dropbox · outside | appended every 15 s; moving it out removes constant sync churn |
 | ~~git remote~~ | **done** | github.com/jsundram/mbta-glx, public. Pages deploys from Actions; suite, pages and rating have all run green. |
 

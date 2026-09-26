@@ -199,3 +199,50 @@ def test_install_and_uninstall_agree_on_the_agent_list():
                              text=True, timeout=30)
         got = sorted(out.stdout.split())
         assert got == plists, f"{script} acts on {got}, ops/ has {plists}"
+
+
+# --- the archiver's heartbeat: the one loss that cannot be undone ---
+
+def test_capture_reports_the_newest_archive_write(live, monkeypatch, tmp_path):
+    """mtime, because the archiver opens-appends-closes once per snapshot. The
+    NEWEST file rather than today's by name, or the few seconds after midnight
+    before the new day's file exists would read as a dead archiver."""
+    old = tmp_path / "rt-2026-09-25.jsonl.gz"
+    new = tmp_path / "rt-2026-09-26.jsonl.gz"
+    old.write_bytes(b"x")
+    new.write_bytes(b"y")
+    os.utime(old, (1000, 1000))
+    os.utime(new, (1790000000, 1790000000))
+    monkeypatch.setattr(server, "ROOT", tmp_path.parent)
+    (tmp_path.parent / "data" / "live").mkdir(parents=True, exist_ok=True)
+    for f in (old, new):
+        f.rename(tmp_path.parent / "data" / "live" / f.name)
+
+    status, headers, body = get(live, "/capture")
+    assert status == 200
+    d = json.loads(body)
+    assert set(d) == {"as_of", "stale_after_s"}, f"the route grew a field: {sorted(d)}"
+    assert d["as_of"] == 1790000000
+    assert d["stale_after_s"] == server.CAPTURE_STALE_S
+
+
+def test_capture_reports_zero_when_nothing_was_ever_written(live, monkeypatch,
+                                                            tmp_path):
+    monkeypatch.setattr(server, "ROOT", tmp_path)
+    (tmp_path / "data" / "live").mkdir(parents=True)
+    d = json.loads(get(live, "/capture")[2])
+    assert d["as_of"] == 0.0, "no archive at all must not read as fresh"
+
+
+def test_capture_is_reachable_cross_origin_and_is_on_the_allowlist(live):
+    _, headers, _ = get(live, "/capture")
+    assert headers.get("Access-Control-Allow-Origin") == "*"
+    assert "/capture" in server.BROWSER_ROUTES
+
+
+def test_the_stale_threshold_is_far_above_the_archivers_own_cadence():
+    """15 s between appends, and the largest ordinary gap measured across a
+    15-hour day was 18 s. A threshold near that would cry wolf on jitter."""
+    assert server.CAPTURE_STALE_S >= 300, (
+        f"{server.CAPTURE_STALE_S}s is close enough to the 15 s write cadence to "
+        "fire on ordinary jitter")

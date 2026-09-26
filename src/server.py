@@ -58,7 +58,20 @@ BROWSER_ROUTES = {
     # serves, not "extras": a bag invites a second thing in it, and the whole
     # point of this allowlist is that there is never a second thing.
     "/skips": "protobuf-only SKIPPED/CANCELED markers; cdn.mbta.com has no CORS",
+    # A second entry, and it earns the same test as the first: a browser cannot
+    # know when a file on this Mac was last written, and an un-captured day is
+    # gone for good -- the v3 /schedules endpoint only serves ~8 days back. This
+    # is liveness, not computed rows, so it does not touch the static property:
+    # with the backend unreachable the board says "unknown" and works exactly as
+    # before.
+    "/capture": ("a browser cannot know when a file on this Mac was last written, "
+                 "and an un-captured day cannot be re-fetched"),
 }
+
+# The archiver appends every 15 s, and the largest ordinary gap measured across a
+# 15-hour day was 18 s. Ten minutes is therefore not jitter -- it is asleep, dead
+# or throttled, and every minute of it is data that cannot be re-fetched.
+CAPTURE_STALE_S = 600
 
 # How long the board may trust a skip set. Two of service.skipped_trips' own 30 s
 # cache cycles: long enough that an ordinary miss does not blank the strikethrough,
@@ -164,6 +177,21 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, "application/json", json.dumps({
                     "as_of": as_of, "trips": sorted(trips),
                     "ttl_s": SKIP_TTL_S}).encode())
+            except Exception as e:  # noqa: BLE001
+                self._send(503, "application/json",
+                           json.dumps({"error": str(e)}).encode())
+        elif u.path == "/capture":
+            # The newest archive file's mtime, not today's by name: the archiver
+            # opens, appends and closes once per snapshot, so mtime is the
+            # heartbeat -- and taking the newest avoids reading 0 for the few
+            # seconds after midnight before the new day's file exists.
+            try:
+                live = ROOT / "data" / "live"
+                as_of = max((f.stat().st_mtime
+                             for f in live.glob("rt-*.jsonl.gz")), default=0.0)
+                self._send(200, "application/json", json.dumps({
+                    "as_of": as_of,
+                    "stale_after_s": CAPTURE_STALE_S}).encode())
             except Exception as e:  # noqa: BLE001
                 self._send(503, "application/json",
                            json.dumps({"error": str(e)}).encode())

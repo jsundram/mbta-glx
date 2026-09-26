@@ -407,7 +407,7 @@ async function scheduleSlots(model, day) {
 
 /** Trips MBTA has declared will not stop here. Only the protobuf feed carries
  *  these and cdn.mbta.com has no CORS, so the backend parses it and serves the
- *  answer at constants.extras_url.
+ *  answer at <backend_url>/skips.
  *
  *  Nothing here may block the board. The endpoint lives on a tailnet host, so
  *  when the Mac is asleep or the phone is off the tailnet the connection is
@@ -431,8 +431,9 @@ const SKIP_BACKOFF_S = 60;      // after a failure, stop asking for a while
 let skipCache = {trips: new Set(), asOf: 0, ttl: 60, nextTry: 0};
 
 async function skippedTrips(now, model) {
-  const url = (model.m.constants || {}).extras_url;
-  if (!url) return new Set();
+  const base = (model.m.constants || {}).backend_url;
+  if (!base) return new Set();
+  const url = `${base}/skips`;
   if (now >= skipCache.nextTry) {
     try {
       const d = await getJSON(url, SKIP_TIMEOUT_MS);
@@ -444,6 +445,39 @@ async function skippedTrips(now, model) {
   }
   if (!skipCache.asOf || now - skipCache.asOf > skipCache.ttl) return new Set();
   return skipCache.trips;
+}
+
+/** When the archive was last appended to, and whether that is alarming.
+ *
+ *  Only the backend knows: an un-captured day is gone for good, because the v3
+ *  /schedules endpoint serves about eight days back and nothing else keeps them.
+ *  launch-plan.md calls a silently dead archiver the top failure mode, and until
+ *  now nothing anywhere would have said so.
+ *
+ *  Three states, and the third has to be distinguishable from the second or this
+ *  is worse than useless: fresh, stale (the archiver is not writing -- data is
+ *  being lost right now), and unknown (the backend is unreachable, which is the
+ *  normal state of a phone off the tailnet and says nothing about the archiver).
+ *  Same timeout and backoff as the skip set, for the same reason. */
+const capture = {asOf: 0, staleAfter: 600, seen: false, nextTry: 0};
+
+async function captureAge(now, model) {
+  const base = (model.m.constants || {}).backend_url;
+  if (!base) return null;
+  if (now >= capture.nextTry) {
+    try {
+      const d = await getJSON(`${base}/capture`, SKIP_TIMEOUT_MS);
+      capture.asOf = d.as_of || 0;
+      capture.staleAfter = d.stale_after_s || 600;
+      capture.seen = true;
+      capture.nextTry = 0;
+    } catch (e) {
+      capture.seen = false;
+      capture.nextTry = now + SKIP_BACKOFF_S;
+    }
+  }
+  if (!capture.seen) return null;                 // unknown, not healthy
+  return {age: now - capture.asOf, stale: (now - capture.asOf) > capture.staleAfter};
 }
 
 async function fetchAlerts() {
@@ -567,6 +601,7 @@ function start(onData, onError) {
       const day = serviceDate(snap.t);
       const slots = await scheduleSlots(model, day);
       const skipped = await skippedTrips(snap.t, model);
+      const cap = await captureAge(snap.t, model);
       if (snap.t - lastAlerts > 120) {
         lastAlerts = snap.t;
         alerts = await fetchAlerts().catch(() => alerts);
@@ -574,9 +609,10 @@ function start(onData, onError) {
       // walk 0: the board draws its own leave time from `lo`, as /status did.
       const rows = computeRows(snap.t, snap.preds, snap.vehicles, model, 0, QS,
                                model.need("horizon_s"), berths, slots, skipped);
-      onData(buildStatus(snap.t, snap, model, rows, berths, here,
-                         arrivals.recent.slice(-5), lineMap(snap, model),
-                         alerts, slots));
+      onData(Object.assign(
+        buildStatus(snap.t, snap, model, rows, berths, here,
+                    arrivals.recent.slice(-5), lineMap(snap, model), alerts, slots),
+        {capture: cap}));
     } catch (e) {
       if (onError) onError(e);
     }

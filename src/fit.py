@@ -92,12 +92,14 @@ def main() -> None:
         # default and the walk the backend scores with cannot silently differ.
         # data/config.json is the one copy; the rider overrides it in the UI.
         "walk_s": service.DEFAULT_WALK,
-        # Where the board fetches the protobuf-only skip set. A deployment fact,
-        # not a fitted one -- published here so moving the endpoint is a republish
-        # rather than a code change, and so grepping web/ for a host cannot miss
-        # it. Empty or absent means no endpoint: the board degrades to an empty
-        # skip set, which is how it behaved before skips existed at all.
-        "extras_url": service.CONFIG.get("extras_url", ""),
+        # The backend's base URL: the board appends /skips and /capture. A
+        # deployment fact, not a fitted one -- published here so moving the host
+        # is a republish rather than a code change, and so grepping web/ for a
+        # host cannot miss it. A base rather than one constant per route, because
+        # there are two of them now and they move together. Empty or absent means
+        # no backend: the board loses the strikethrough and the capture age, and
+        # is otherwise exactly the board it was before either existed.
+        "backend_url": service.CONFIG.get("backend_url", "").rstrip("/"),
         "band_s": {"mbta": 75, "departed Ball Sq": 7,
                    "departed Medford/Tufts": 33},
         "stops": {"magoun_in": "70508", "ball_in": "70510",
