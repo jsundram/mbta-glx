@@ -8,17 +8,17 @@
 
      Bound to 127.0.0.1 by server.py. `tailscale serve` is what makes it reachable
      from the rider's phone, terminating TLS on the tailnet and proxying here.
-     No secrets: everything this serves is public transit data. -->
+
+     It runs through src/serve.sh rather than uv directly, because a plist cannot
+     carry MBTA_API_KEY without committing it. Everything this SERVES is public
+     transit data; the key is only for what it fetches. -->
 <plist version="1.0">
 <dict>
   <key>Label</key><string>com.magoun.server</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/opt/homebrew/bin/uv</string>
-    <string>run</string><string>--quiet</string>
-    <string>--with</string><string>polars</string>
-    <string>--with</string><string>gtfs-realtime-bindings</string>
-    <string>python</string><string>src/server.py</string><string>8723</string>
+    <string>/Users/jsundram/Dropbox/Code/mbta-glx/src/serve.sh</string>
+    <string>8723</string>
   </array>
   <key>WorkingDirectory</key><string>/Users/jsundram/Dropbox/Code/mbta-glx</string>
   <key>RunAtLoad</key><true/>

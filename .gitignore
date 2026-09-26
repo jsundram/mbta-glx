@@ -13,4 +13,5 @@ __pycache__/
 *.pyc
 .DS_Store
 ops/ntfy.env
+ops/secrets.env
 data/plan.json

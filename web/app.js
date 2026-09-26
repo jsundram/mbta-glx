@@ -371,15 +371,35 @@ async function getJSON(url, timeoutMs) {
 const qs = params => Object.entries(params)
   .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
 
+/** An api-v3 URL, with this device's key if it has one.
+ *
+ *  The anonymous limit is 20 requests/minute PER CLIENT IP, and one board is
+ *  ~12.5 of them. A home network puts every device behind one public IP, and
+ *  mobile carriers put thousands behind one, so "my phone is elsewhere" is not
+ *  the same as "my phone has the budget to itself". A key makes the limit
+ *  per-key and the contention goes away.
+ *
+ *  Per device in localStorage, never in the repo: this page is served from a
+ *  public origin and model.json with it, so a key published as a constant would
+ *  be a key given away. Same reasoning as the ntfy topics.
+ *
+ *  A query parameter rather than the x-api-key header service.py uses: a custom
+ *  header makes this a non-simple request, and the CORS preflight would DOUBLE
+ *  the request count -- the opposite of the point. */
+const apiKey = () => { try { return store.get("magoun.mbtakey") || ""; }
+                       catch (e) { return ""; } };
+const apiURL = (path, params) => `${API}/${path}?`
+  + qs(apiKey() ? Object.assign({}, params, {api_key: apiKey()}) : params);
+
 /** The same two calls service.snapshot() makes. Both endpoints send
  *  access-control-allow-origin: *, verified 2026-09-25, and need no key. */
 async function snapshot(model) {
   const s = model.stops;
   const [preds, veh] = await Promise.all([
-    getJSON(`${API}/predictions?` + qs({
+    getJSON(apiURL("predictions", {
       "filter[stop]": [s.magoun_in, s.ball_in, s.med_in, s.med_out].join(","),
       "sort": "arrival_time"})),
-    getJSON(`${API}/vehicles?` + qs({"filter[route]": ROUTES})),
+    getJSON(apiURL("vehicles", {"filter[route]": ROUTES})),
   ]);
   return {t: Date.now() / 1000, preds: preds.data, vehicles: veh.data};
 }
@@ -393,7 +413,7 @@ async function scheduleSlots(model, day) {
   if (cached) {
     try { return JSON.parse(cached); } catch (e) { /* refetch */ }
   }
-  const body = await getJSON(`${API}/schedules?` + qs({
+  const body = await getJSON(apiURL("schedules", {
     "filter[stop]": model.stops.magoun_in, "filter[date]": day,
     "filter[direction_id]": "0", "page[limit]": "500"}));
   const slots = body.data
@@ -496,7 +516,7 @@ async function captureAge(now, model) {
 }
 
 async function fetchAlerts() {
-  const body = await getJSON(`${API}/alerts?` + qs({"filter[route]": ROUTES}));
+  const body = await getJSON(apiURL("alerts", {"filter[route]": ROUTES}));
   return body.data.map(a => ({
     id: a.id, effect: a.attributes.effect, severity: a.attributes.severity,
     lifecycle: a.attributes.lifecycle, header: a.attributes.header,
@@ -556,7 +576,7 @@ function buildStatus(now, snap, model, rows, berths, here, recent, line,
  *  it silently drops the berth tier until the next train berths.
  */
 function start(onData, onError) {
-  let model = null, alerts = [], stopped = false;
+  let model = null, alerts = [], stopped = false, lastError = null;
   const berthTracker = new BerthTracker(JSON.parse(store.get("magoun.berths", "{}")));
   const arrivals = new ArrivalTracker();
   let modelText = null, lastAlerts = 0, lastModelCheck = 0;
@@ -631,7 +651,12 @@ function start(onData, onError) {
         buildStatus(snap.t, snap, model, rows, berths, here,
                     arrivals.recent.slice(-5), lineMap(snap, model), alerts, slots),
         {capture: cap}));
+      lastError = null;
     } catch (e) {
+      // 429 is not "the feed is down", it is "you are asking too often", and the
+      // rider can do something about it. Without this the board simply stops
+      // updating and goes stale with no clue why -- which is what it did.
+      lastError = /\b429\b/.test(String(e && e.message)) ? "ratelimit" : "error";
       if (onError) onError(e);
     }
   }
@@ -641,6 +666,7 @@ function start(onData, onError) {
   return {
     stop() { stopped = true; clearInterval(timer); },
     refresh: tick,
+    get feedError() { return lastError; },
   };
 }
 

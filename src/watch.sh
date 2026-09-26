@@ -3,7 +3,9 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-[ -f ops/ntfy.env ] && set -a && . ops/ntfy.env && set +a
+for f in ops/ntfy.env ops/secrets.env; do
+  [ -f "$f" ] && set -a && . "$f" && set +a
+done
 
 # The notifier has to fire at a wall-clock instant, and a sleeping host runs the
 # missed tick on wake instead -- far too late to leave for a train. caffeinate held

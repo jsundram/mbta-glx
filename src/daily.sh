@@ -11,6 +11,10 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+# snapshot_schedule.py talks to api-v3 and reads MBTA_API_KEY from here.
+for f in ops/ntfy.env ops/secrets.env; do
+  [ -f "$f" ] && set -a && . "$f" && set +a
+done
 echo "=== $(date -Iseconds) daily ==="
 uv run --quiet python src/snapshot_schedule.py
 uv run --quiet --with polars python src/rollup.py --compact --prune 90

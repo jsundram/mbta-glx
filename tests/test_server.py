@@ -288,3 +288,49 @@ def test_every_launcher_of_the_skip_path_installs_the_protobuf_library():
     assert not offenders, (
         f"these launch code that reads the skip set without {PROTOBUF_DEP}, so it "
         "will silently report no skips:\n  " + "\n  ".join(offenders))
+
+
+# --- a key in a public repo is a key given away ---
+
+def test_no_mbta_key_reaches_the_published_origin_or_the_repo():
+    """The board needs a key too -- the anonymous cap is per client IP and one
+    board is most of it -- but it is served from a public origin, so the key is
+    per device in localStorage and must never be committed or published.
+
+    Checks the shape, not a specific string: an MBTA key is 32 hex characters,
+    and `api_key=` or `x-api-key` with a literal beside it is the mistake.
+    """
+    root = pathlib.Path(__file__).resolve().parent.parent
+    published = json.loads((root / "web" / "model.json").read_text())
+    assert "api_key" not in json.dumps(published).lower(), \
+        "model.json carries something calling itself an api key; it is public"
+
+    import re as _re
+    hexkey = _re.compile(r"\b[0-9a-f]{32}\b", _re.I)
+    literal = _re.compile(r"""(api_key|x-api-key)["'\s:=]+["'][^"']{8,}["']""", _re.I)
+    offenders = []
+    for f in sorted([*root.glob("web/*"), *root.glob("src/*.py"), *root.glob("src/*.sh"),
+                     *root.glob("ops/*"), *root.glob("*.md")]):
+        if not f.is_file() or f.name == "secrets.env":
+            continue
+        text = f.read_text(errors="ignore")
+        # model.js is model.json wrapped; fixtures carry MBTA trip ids, not keys.
+        for m in hexkey.findall(text) + [m[0] for m in literal.findall(text)]:
+            offenders.append(f"{f.relative_to(root)}: {m[:40]}")
+    assert not offenders, "possible API key committed:\n  " + "\n  ".join(offenders)
+
+
+def test_the_board_sends_its_key_as_a_query_param_not_a_header():
+    """A custom header makes the request non-simple, and the CORS preflight would
+    double the request count -- the opposite of why the key is there.
+
+    Comments are stripped first. The previous version of this failed on the
+    comment in app.js explaining why the header is NOT used, which is the same
+    way a grep-shaped test tripped over itself earlier in this suite.
+    """
+    import re as _re
+    app = (pathlib.Path(__file__).resolve().parent.parent / "web" / "app.js").read_text()
+    code = _re.sub(r"//[^\n]*", "", _re.sub(r"/\*.*?\*/", "", app, flags=_re.S))
+    assert "api_key" in code, "the board never sends a key, so it cannot lift its cap"
+    assert "x-api-key" not in code.lower(), \
+        "a custom header triggers a CORS preflight and doubles the request count"

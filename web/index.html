@@ -412,9 +412,16 @@ function paint() {
   const u = data.upstream || {};
   const age = now - lastOk;
   document.body.classList.toggle("stale", age > 30);
+  // Why it is stale, when we know. A 429 is the rider's to fix -- MBTA allows 20
+  // requests a minute per IP and one board is most of that, so a second tab or a
+  // second device on the same wifi is enough. Without this the board just stops
+  // and says nothing, which is how this was found.
+  const rl = feed && feed.feedError === "ratelimit";
   $("#foot").innerHTML =
     `<span class="dot${age > 30 ? " off" : ""}"></span>`
-    + (age > 30 ? `stale ${Math.round(age)}s` : `live`)
+    + (rl ? `<span class="cap">MBTA is rate-limiting this device</span>`
+          + ` &mdash; close other boards, or set an API key`
+       : age > 30 ? `stale ${Math.round(age)}s` : `live`)
     + (u.non_revenue ? ` &middot; ${u.non_revenue} not in service` : "")
     + ` &middot; ${u.at_terminus ?? 0} at Medford/Tufts, `
     + `${(u.departed_med || []).length} past Medford, `

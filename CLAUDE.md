@@ -192,14 +192,21 @@ without anyone noticing.
   "file" is not supported`) — CORS never enters into it. Hence `web/model.js`, the
   same bytes as a script; `fit.py` writes it and a test compares them. Cross-origin
   fetches to `api-v3.mbta.com` do work from `file://`.
-- **The v3 API is 20 requests/minute unauthenticated, and this repo has several
-  pollers.** `service.snapshot()` is *two* requests, so the archiver at 15 s is
-  ~8/min and a notifier tick at 20 s is another ~6/min. Add a second notifier — a
-  live test alongside the launchd one — and it tips over into **HTTP 429**, which
-  `watch.main` swallows as a bad tick and `brief.health` never sees at all. Set
-  `MBTA_API_KEY` (`service.KEY` already reads it) before running anything extra,
-  or stop the other pollers first. Measured: two notifiers plus the archiver
-  throttled within six minutes.
+- **The v3 API allows 20 requests/minute unauthenticated, counted PER CLIENT IP.**
+  `service.snapshot()` is *two* requests, so a notifier tick at 20 s is ~6/min and
+  **one open board is ~12.5/min** — a board plus anything else on the same public
+  IP is already over, and a home network puts every device behind one. (The
+  archiver is innocent: `record_rt.py` reads `cdn.mbta.com`, not v3.) Measured
+  live: `x-ratelimit-remaining: 0` with one board open and a live test running.
+  A 429 is swallowed by `watch.main` as a bad tick, and in the board it aborts
+  `tick()` at `snapshot()` — *before* the skip and capture fetches, so those look
+  unanswered when the real fault is upstream.
+  Two keys, because they cannot share one: the backend reads `MBTA_API_KEY` from
+  `ops/secrets.env` (`service.KEY` sends it as `x-api-key`), and the board keeps
+  its own in `localStorage["magoun.mbtakey"]`, sent as an `api_key` query param —
+  a custom header would force a CORS preflight and double the request count.
+  **Never publish a key into `model.json`**: that file is served from a public
+  origin. `tests/test_server.py` fails on a committed key.
 - The v3 `/schedules` endpoint only serves ~8 days back. Daily snapshots are the
   only way to keep them; an un-captured day is gone.
 
