@@ -22,7 +22,12 @@ MAGOUN_IN = "70508"
 
 
 def snapshots(day: str) -> Iterator[dict]:
+    import archive
     import rollup
+    d = LIVE / f"day={day}"
+    if d.is_dir():
+        yield from archive.read(d)
+        return
     f = LIVE / f"rt-{day}.jsonl.gz"
     if not f.exists():
         f = LIVE / f"rt-{day}.delta.jsonl.gz"

@@ -26,6 +26,11 @@ VIEWS = {
     "lamp": "read_parquet('{r}/data/raw/*.parquet')",
     "legs": "read_parquet('{r}/data/magoun.parquet')",
     "snaps": "read_json_auto('{r}/data/live/rt-*.jsonl.gz')",
+    # the compacted archive, queryable with no reconstruction at all
+    "arc_preds": "read_parquet('{r}/data/live/day=*/preds.parquet', "
+                 "hive_partitioning=true)",
+    "arc_vehicles": "read_parquet('{r}/data/live/day=*/vehicles.parquet', "
+                    "hive_partitioning=true)",
 }
 
 

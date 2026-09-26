@@ -278,3 +278,47 @@ def test_compact_keeps_a_keyframe_every_hour():
     """A corrupt or truncated run must lose less than an hour, not the whole day."""
     import rollup
     assert rollup.KEYFRAME * 15 <= 3600
+
+
+# --- delta-parquet archive: a null cannot mean "unchanged" ---
+
+def test_archive_round_trip_handles_fields_changing_to_null():
+    """veh is null until a vehicle is assigned, then set, and can clear again.
+
+    Using null to mean "unchanged" corrupted 2,088 of 5,738 snapshots before the
+    changed-field mask existed.
+    """
+    import archive
+    snaps = []
+    for i, veh in enumerate([None, None, "G-1", "G-1", None, "G-2"]):
+        snaps.append({
+            "t": 1000.0 + i * 15,
+            "preds": [{"stop": "70508", "trip": "t1", "route": "Green-E", "dir": 0,
+                       "veh": veh, "seq": 6, "arr": 2000 + i, "dep": None,
+                       "unc": None, "rel": 0}],
+            "vehicles": [{"id": "G-1", "route": "Green-E", "trip": "t1", "dir": 0,
+                          "stop": "70510", "status": "STOPPED_AT", "seq": 5,
+                          "ts": 900 + i}],
+        })
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as d:
+        archive.write(snaps, pathlib.Path(d) / "day=x")
+        back = list(archive.read(pathlib.Path(d) / "day=x"))
+    assert [p["preds"][0]["veh"] for p in back] == [s["preds"][0]["veh"] for s in snaps]
+
+
+def test_archive_drops_entities_that_leave_the_feed():
+    import archive
+    import tempfile, pathlib
+    base = {"stop": "70508", "trip": "t1", "route": "Green-E", "dir": 0,
+            "veh": None, "seq": 6, "arr": 1, "dep": None, "unc": None, "rel": 0}
+    veh = {"id": "G-1", "route": "Green-E", "trip": "t1", "dir": 0,
+           "stop": "70510", "status": "STOPPED_AT", "seq": 5, "ts": 1}
+    snaps = [{"t": 1.0, "preds": [base], "vehicles": [veh]},
+             {"t": 16.0, "preds": [], "vehicles": []},
+             {"t": 31.0, "preds": [base], "vehicles": [veh]}]
+    with tempfile.TemporaryDirectory() as d:
+        archive.write(snaps, pathlib.Path(d) / "day=x")
+        back = list(archive.read(pathlib.Path(d) / "day=x"))
+    assert [len(s["preds"]) for s in back] == [1, 0, 1]
+    assert [len(s["vehicles"]) for s in back] == [1, 0, 1]

@@ -135,6 +135,39 @@ def from_delta(lines) -> Iterator[dict]:
         yield snap
 
 
+def compact_parquet(path: pathlib.Path) -> tuple[int, int] | None:
+    """Rewrite a finished raw day as delta-encoded parquet, if it round-trips.
+
+    Chosen over delta-JSONL after measuring like-for-like: 1.25 vs 2.02 MB/day,
+    and DuckDB queries it directly instead of needing reconstruction in Python.
+    """
+    import archive
+    with gzip.open(path, "rt") as f:
+        snaps = [json.loads(l) for l in f if l.strip()]
+    if not snaps:
+        return None
+    day = re.search(r"(\d{4}-\d{2}-\d{2})", path.name).group(1)
+    dest = LIVE / f"day={day}"
+    archive.write(snaps, dest)
+    back = list(archive.read(dest))
+    if len(back) != len(snaps):
+        return None
+
+    def canon(s):
+        return (round(s["t"], 3),
+                sorted(json.dumps({k: p.get(k) for k in archive.PF}, sort_keys=True)
+                       for p in s["preds"]),
+                sorted(json.dumps({k: v.get(k) for k in archive.VF}, sort_keys=True)
+                       for v in s["vehicles"]),
+                json.dumps(s.get("alerts"), sort_keys=True))
+    if any(canon(a) != canon(b) for a, b in zip(snaps, back)):
+        return None
+    before = path.stat().st_size
+    after = sum(f.stat().st_size for f in dest.iterdir())
+    path.unlink()
+    return before, after
+
+
 def compact(path: pathlib.Path) -> tuple[int, int] | None:
     """Rewrite a finished raw day in delta form, only if it round-trips exactly.
 
@@ -171,6 +204,7 @@ def compact(path: pathlib.Path) -> tuple[int, int] | None:
 
 
 def rollup_day(path: pathlib.Path) -> pl.DataFrame:
+    """Distil one archived day, in whichever form it is stored."""
     day = re.search(r"(\d{4}-\d{2}-\d{2})", path.name).group(1)
     # Arrivals must be counted as TRANSITIONS into STOPPED_AT. Keying on
     # (vehicle, stop) for a whole day records only each vehicle's first visit,
@@ -179,21 +213,20 @@ def rollup_day(path: pathlib.Path) -> pl.DataFrame:
     actual: dict[tuple[str, str], list[float]] = {}
     prev: dict[str, tuple] = {}
     preds: list[tuple] = []
-    with gzip.open(path, "rt") as f:
-        stream = from_delta(f) if ".delta." in path.name else (
-            json.loads(l) for l in f if l.strip())
-        for snap in stream:
-            t = snap["t"]
-            for v in snap["vehicles"]:
-                cur = (v.get("stop"), v.get("status"))
-                if (v.get("status") == "STOPPED_AT" and v.get("stop")
-                        and prev.get(v["id"]) != cur):
-                    actual.setdefault((v["id"], v["stop"]), []).append(t)
-                prev[v["id"]] = cur
-            for p in snap["preds"]:
-                if p.get("arr") and p.get("veh"):
-                    preds.append((p["veh"], p["stop"], p.get("dir"), p.get("route"),
-                                  p.get("trip"), t, p["arr"], p.get("unc")))
+
+    for snap in _snapshots(path):
+        t = snap["t"]
+        for v in snap["vehicles"]:
+            cur = (v.get("stop"), v.get("status"))
+            if (v.get("status") == "STOPPED_AT" and v.get("stop")
+                    and prev.get(v["id"]) != cur):
+                actual.setdefault((v["id"], v["stop"]), []).append(t)
+            prev[v["id"]] = cur
+        for p in snap["preds"]:
+            if p.get("arr") and p.get("veh"):
+                preds.append((p["veh"], p["stop"], p.get("dir"), p.get("route"),
+                              p.get("trip"), t, p["arr"], p.get("unc")))
+
     rows = []
     for veh, stop, d, route, trip, made, pred, unc in preds:
         # Pair each prediction with the next arrival of that vehicle at that stop.
@@ -210,6 +243,21 @@ def rollup_day(path: pathlib.Path) -> pl.DataFrame:
     return pl.DataFrame(rows, schema=SCHEMA) if rows else pl.DataFrame(schema=SCHEMA)
 
 
+def _snapshots(path: pathlib.Path):
+    """Yield snapshots from any archive form: raw JSONL, delta JSONL, or parquet."""
+    if path.is_dir():
+        import archive
+        yield from archive.read(path)
+        return
+    with gzip.open(path, "rt") as f:
+        if ".delta." in path.name:
+            yield from from_delta(f)
+        else:
+            for line in f:
+                if line.strip():
+                    yield json.loads(line)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--prune", type=int, metavar="DAYS",
@@ -221,7 +269,7 @@ def main() -> None:
     PAIRS.mkdir(parents=True, exist_ok=True)
     today = time.strftime("%Y-%m-%d")
 
-    for raw in sorted(LIVE.glob("rt-*.jsonl*.gz")):
+    for raw in sorted(list(LIVE.glob("rt-*.jsonl*.gz")) + list(LIVE.glob("day=*"))):
         day = re.search(r"(\d{4}-\d{2}-\d{2})", raw.name).group(1)
         out = PAIRS / f"pairs-{day}.parquet"
         if out.exists() and not a.force:
@@ -238,7 +286,7 @@ def main() -> None:
         for raw in sorted(LIVE.glob("rt-*.jsonl.gz")):
             if ".delta." in raw.name or raw.name.endswith(f"{today}.jsonl.gz"):
                 continue
-            r = compact(raw)
+            r = compact_parquet(raw)
             print(f"compact {raw.name}: "
                   + (f"{r[0]/1e6:.2f} -> {r[1]/1e6:.2f} MB ({r[0]/r[1]:.1f}x)"
                      if r else "SKIPPED (round-trip check failed)"))

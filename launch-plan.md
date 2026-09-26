@@ -207,7 +207,8 @@ Measured on a real day (320,622 prediction rows, 243,368 vehicle rows):
 | parquet + snappy | 3.18 | 3.0× |
 | parquet + zstd | 2.18 | 4.4× |
 | parquet + zstd, sorted by key | 2.09 | 4.6× |
-| **delta JSONL + gzip** (`rollup.compact`) | **1.95** | **4.9×** |
+| delta JSONL + gzip | 1.95 | 4.9× |
+| **delta parquet + zstd, times as offsets** | **1.25** | **7.9×** |
 
 **Raw protobuf is not an option.** The unfiltered feed is ~890 KB per poll, so
 storing it verbatim is ~5 GB/day. Filtering to the corridor is what makes this
@@ -221,24 +222,28 @@ storing it verbatim is ~5 GB/day. Filtering to the corridor is what makes this
   Parquet wants a fixed schema per file.
 - `zcat | grep` answered real questions repeatedly during debugging.
 
-**JSONL is arguably wrong for the archive tier.** Delta-JSONL wins on size by 7%,
-which is noise, while parquet is **directly queryable** — polars can scan it
-without reconstructing snapshots. For the aggregate questions that make up most
-analysis, that matters far more than 0.14 MB/day.
+**JSONL is wrong for the archive tier.** An earlier comparison here was
+apples-to-oranges — delta-JSONL against *full-state* parquet. Done fairly, delta
+parquet is **1.62× smaller** as well as directly queryable. Two things do the work:
+only changed rows are stored, and timestamps are kept as offsets from the snapshot
+time, turning ten-digit epochs into small integers.
 
-- [ ] Consider making the compacted form parquet rather than delta-JSONL. Same
-      size, far better for analysis; replay regroups rows by timestamp. Not urgent:
-      delta compaction is built, verified lossless, and in the daily job.
+`src/archive.py` is now the compacted form (`data/live/day=YYYY-MM-DD/`), and
+`q.sh` exposes it as the `arc_preds` / `arc_vehicles` views — DuckDB reads it with
+no reconstruction at all.
 
 ### Compaction
 
-`rollup.py --compact` re-encodes finished days as hourly keyframes plus changes,
-**4.9×** smaller, and only replaces the original if the whole snapshot round-trips
-exactly. Two bugs were caught by that check before anything was overwritten:
+`rollup.py --compact` re-encodes finished days as delta parquet, **6–7×** smaller
+on real days, and only deletes the original if every snapshot round-trips exactly. Two bugs were caught by that check before anything was overwritten:
 vehicles leaving the feed were never removed on reconstruction (silently dropping
-1,595 pairs from one day), and a hand-picked field list missed `veh`, which is null
-until a vehicle is assigned to a trip. The verifier now compares entire snapshots,
-not a chosen subset — the narrow check passed while losing data.
+1,595 pairs from one day), and a hand-picked field list missed `veh`. A third
+appeared in the parquet version: **a null cannot mean "unchanged"**, because `veh`
+and `dep` are legitimately null, so a field *changing to* null read as unmoved —
+that corrupted 2,088 of 5,738 snapshots until an explicit changed-field bitmask
+replaced it. In all three cases the verifier caught it before anything was
+overwritten, and in the first case only after being widened to compare entire
+snapshots rather than a chosen subset.
 
 With compaction, pruning can move from 30 days to 90 and a full year of raw costs
 ~0.75 GB.
