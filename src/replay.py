@@ -72,16 +72,43 @@ def _snapshots(paths):
                     yield json.loads(line)
 
 
-def score(walk: int | None = None, band: int = 75, n: int = 10, paths=None,
-          sched_band: int = 22, day: str | None = None) -> list[dict]:
+_MODEL: service.Model | None = None
+
+
+def _model() -> service.Model:
+    """The fitted model, loaded once. This scorer reads it rather than restating it."""
+    global _MODEL
+    if _MODEL is None:
+        _MODEL = service.Model()
+    return _MODEL
+
+
+def score(walk: int | None = None, band: int | None = None, n: int = 10, paths=None,
+          sched_band: int | None = None, day: str | None = None,
+          model: service.Model | None = None) -> list[dict]:
     """Replay the last `n` arrivals as the service would have handled them.
 
     Both sources the service quotes are replayed: MBTA's own prediction where one
     exists, and the timetable (minus its fitted q10 offset) before that. Scoring
     against MBTA predictions alone would understate the app, because the schedule
     is what carries the horizon beyond ~13 minutes.
+
+    `band` and `sched_band` are read from the model, not restated. They were
+    hardcoded 75 and 22 -- and 22 was a hand-copied snapshot of
+    model.sched_offset(0.10) == -22.0, which moves at every refit while the literal
+    would not have. This function feeds stats.json's published coverage number, so
+    the staleness would have been invisible and wrong at exactly the moment a rating
+    changed. They stay overridable for experiments.
     """
     walk = walk if walk is not None else service.DEFAULT_WALK
+    if band is None or sched_band is None:
+        m = model or _model()
+        if band is None:
+            band = m.const("band_s")["mbta"]
+        if sched_band is None:
+            # The service quotes slot + sched_offset(q10); this is the same number
+            # with the sign the arithmetic below wants.
+            sched_band = -m.sched_offset(0.10)
     paths = paths or (sorted(LIVE.glob("rt-*.jsonl*.gz"))
                       + sorted(LIVE.glob("day=*")))[-2:]
     arrivals: list[tuple[float, str]] = []

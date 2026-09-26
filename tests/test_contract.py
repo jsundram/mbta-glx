@@ -190,6 +190,29 @@ def test_the_board_does_not_retype_the_walk():
         "the board does not read the published walk at all"
 
 
+def test_the_scorer_reads_its_bands_from_the_model():
+    """replay.score is what stats.json's published coverage number comes from.
+
+    `sched_band` was a hand-copied 22 -- which is exactly -model.sched_offset(0.10)
+    today, and something else after the next refit. A literal there goes stale in a
+    published number at precisely the moment a rating changes, with nothing to say
+    so. `band` duplicated constants.band_s.mbta the same way.
+    """
+    import inspect
+
+    import replay
+    sig = inspect.signature(replay.score)
+    assert sig.parameters["band"].default is None, "band is a literal again"
+    assert sig.parameters["sched_band"].default is None, "sched_band is a literal again"
+    src = inspect.getsource(replay.score)
+    assert 'const("band_s")' in src and "sched_offset(0.10)" in src, \
+        "the bands are no longer derived from the model"
+
+    m = service.Model()
+    assert m.const("band_s")["mbta"] == 75
+    assert -m.sched_offset(0.10) == 22.0     # the values the literals had, today
+
+
 def test_glx_stops_match_the_python_definition():
     c = json.loads((WEB / "model.json").read_text())["constants"]
     assert [tuple(t) for t in c["glx"]] == service.GLX_STOPS
