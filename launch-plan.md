@@ -504,6 +504,54 @@ Built as a debugging surface as much as a product: the failure modes in this
 project are all *temporal*, and watching predictions move in real time makes them
 obvious in a way that reading logs after the fact does not.
 
+## How long does daily updating stay worth it?
+
+Measured by refitting on random subsets and comparing to the 35-day estimate
+(median absolute error, seconds):
+
+| quantity | 35-day | 1d | 3d | 8d | 21d | quoted band |
+|---|---|---|---|---|---|---|
+| run_ball q10 | 46 s | 1 | 0 | 0 | 0 | ±14 s |
+| run_med q10 | 169 s | 3 | 2 | 1 | 0 | ±65 s |
+| layover q50 | 568 s | 50 | 40 | 24 | 10 | — |
+| sched_dev q10 | −22 s | 38 | 25 | 14 | 5 | ±318 s |
+| sched_dev q90 | 296 s | 64 | 69 | 18 | 12 | ±318 s |
+| headway q50 | 528 s | 33 | 22 | 21 | 8 | — |
+
+**The physical quantities are finished.** Run times converge in *one or two days*
+and then never move — they are track geometry and speed limits. Collecting more
+data to refit them is pure waste.
+
+**The schedule-dependent ones converge in one to two weeks**, and then the residual
+error is small against the band we actually quote: after ~8 days `sched_dev q90` is
+within 18 s of its final value on a 318 s band. Past about two weeks per rating,
+extra days buy essentially nothing.
+
+### So the cadence should change with time
+
+| | early (first ~2 weeks of a rating) | later |
+|---|---|---|
+| capture | **essential** | **keep** — but for other reasons (below) |
+| refit | **daily, it is still moving** | **per rating (~quarterly), not daily** |
+
+Daily *refitting* has a short shelf life. Daily *capture* stays worth it, for
+reasons that have nothing to do with converging an estimate:
+
+1. **Rating boundaries.** Every new timetable resets the schedule-dependent half.
+   Fall 2026 ends Dec 12; the numbers must be re-earned then, from scratch.
+2. **MBTA's prediction model drifts** and they do not announce changes. This is
+   the one quantity genuinely wanting a trailing window rather than a converged
+   estimate — and we have nowhere near enough history to say how fast it moves.
+3. **Change detection.** A converged estimate is only useful if you notice when it
+   stops being true. Cheap capture is what makes a drift alarm possible.
+4. **The board's self-scoring and the replay harness** both need recent days.
+5. **Forensics.** The Sep 26 works are the example: understanding an odd fortnight
+   later requires having captured it at the time.
+
+- [ ] Replace the daily refit with: refit on rating change, plus a weekly drift
+      check that alarms when a fitted quantile moves more than its convergence
+      noise (roughly: >20 s for `sched_dev`, >2 s for run times).
+
 ## Deploy architecture
 
 Verified 2026-09-25, not assumed:
