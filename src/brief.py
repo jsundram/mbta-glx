@@ -56,7 +56,7 @@ def options(dest: str, deadline: float, walk: int, model: service.Model,
     """
     rng = np.random.default_rng(11)
     rows = service.etas(snap, model, walk, berths=berths)
-    rows = [r for r in rows if r["lo"] > snap["t"]][:8]
+    rows = [r for r in rows if r["lo"] > snap["t"] and not r.get("skipped")][:8]
     ride = _ride(model, dest, N, rng)
     blocked = service.blocking(dest, deadline)
     out = []

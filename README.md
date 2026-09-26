@@ -21,6 +21,12 @@ corridor — suspensions and closures elsewhere on the Green Line are filtered o
 the banner stays worth reading. A destination under a suspension is scored at 0%,
 not at a slightly lower confidence.
 
+Trains MBTA has declared will **skip Magoun** (or whose trip is cancelled) are
+struck through in the upcoming list, never offered as an option, and trigger
+recovery immediately if you had committed to one. Only the protobuf feed carries
+these — the v3 JSON API drops a stop update that has no times, which is exactly
+what a skipped stop looks like.
+
 It carries a live GLX line map, drawn the way the T draws it — a thick
 route-coloured line, white-centred station markers, the terminus capped — with Medford/Tufts at the top holding the
 trains waiting to turn around, inbound running *down* the left rail toward Magoun

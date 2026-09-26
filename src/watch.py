@@ -172,6 +172,14 @@ class Watcher:
             rows = service.etas(snap, self.model, p["walk"], berths=b)
             com = p["committed"]
             tgt = com["target_eta"]
+            # A skipped/cancelled train is stated, not inferred. Act at once rather
+            # than waiting out the 240 s debounce built for a noisy feed.
+            hit = [r for r in rows if r.get("skipped")
+                   and abs(r["eta"] - tgt) <= MATCH]
+            if hit and not p["fired"].get("recover"):
+                log(f"MBTA says the {fmt(tgt)} is not stopping at Magoun")
+                self._recover(p, rows, snap)
+                return
             row = match_target(rows, com, self.model.headway)
             if row is not None and abs(row["eta"] - tgt) > MATCH:
                 log(f"target drifted {(row['eta']-tgt)/60:+.1f} min "
@@ -283,7 +291,8 @@ class Watcher:
             # that from a no-show when the gap is about one headway. Ask.
             gap = nxt["eta"] - p["committed"]["target_eta"] if p.get("committed") else 0
             same_ish = 0 < gap < self.model.headway * 1.5
-            head = "Your train may be running late" if same_ish else "That train vanished"
+            head = ("Your train may be running late" if same_ish
+                    else "That train is not stopping at Magoun")
             notify.send(
                 head,
                 f"Best now is {fmt(nxt['eta'])} · {nxt['p_ontime']:.0%} for "

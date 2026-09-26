@@ -92,8 +92,9 @@ class Handler(BaseHTTPRequestHandler):
                     "next": {"eta": nxt["eta"], "lo": nxt["lo"], "hi": nxt["hi"],
                              "source": nxt["source"], "backed": nxt["backed"]}
                     if nxt else None,
-                    "following": [{"eta": r["eta"], "source": r["source"]}
-                                  for r in rows[1:4]],
+                    "following": [{"eta": r["eta"], "source": r["source"],
+                                   "skipped": r.get("skipped", False)}
+                                  for r in rows[1:5]],
                     "upstream": service.upstream_state(snap),
                     "line": line,
                     "stops": [n for n, _, _ in service.GLX_STOPS],

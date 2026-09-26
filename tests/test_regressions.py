@@ -222,3 +222,23 @@ def test_line_map_places_moving_trains_between_stops():
     assert pos["G-at"] == 0.0                 # berthed at the terminus
     assert pos["G-in"] == 1.5                 # inbound runs DOWN toward Magoun (2)
     assert pos["G-out"] == 2.5                # outbound runs UP toward Tufts
+
+
+# --- skipped / cancelled trains are stated, not inferred ---
+
+def test_skipped_scope_is_this_stop_only():
+    """A system-wide CANCELED union pulled in 67 trips against ~10 real skips."""
+    import inspect
+    import service
+    src = inspect.getsource(service.skipped_trips)
+    assert "su.stop_id == stop" in src
+    # the CANCELED branch must also be scoped to this stop
+    canceled = src.split("schedule_relationship == 3")[1]
+    assert "su.stop_id == stop" in canceled, "cancellations must be scoped to the stop"
+
+
+def test_brief_never_offers_a_skipped_train():
+    import inspect
+    import brief
+    src = inspect.getsource(brief.options)
+    assert 'not r.get("skipped")' in src

@@ -258,13 +258,28 @@ irrelevant alerts trains the eye to ignore it.
 
 ## Other feeds worth taking, in value order
 
-- [ ] **Stop-level `SKIPPED` markers.** `record_rt.py` already archives
+- [x] **Stop-level `SKIPPED` markers — integrated, with a caveat.** `record_rt.py` already archives
       `stop_time_update.schedule_relationship`, and it is *already populated*: 8
       distinct trips marked as skipping Magoun in the first day and a half, and the
       counts are identical across all inbound GLX platforms, i.e. whole trips
       declared as not serving the extension. **This is the no-show signal,
       announced rather than inferred**, and it is sitting unused in the archive.
       It may also be what the rider observed as "going express".
+
+      **Measured lead time is poor.** The marker lands about **two minutes before**
+      the scheduled arrival and lingers for an hour afterwards; on three of nine
+      cases it appeared *after* the scheduled time. So it is a confirmation, not a
+      warning, and it cannot save a 6.5-minute walk. What it is, is **definitive** —
+      which the inferred no-show veto never was. Concretely it means:
+
+      - a scheduled train MBTA says is skipping never appears as an option
+      - a committed train that gets marked fires recovery **immediately**, bypassing
+        the 240 s debounce built for a noisy feed
+      - the archive can now label no-shows as ground truth instead of inferring them
+
+      Coverage is partial: ~10 marked skips a day against a ~9.6% no-show rate on
+      ~145 trains, so roughly a third of no-shows are announced and the rest stay
+      silent. The veto still earns its place for the other two-thirds.
 - [ ] **Trip-level `CANCELED`.** Seen live on the Green Line. Same purpose,
       stronger statement.
 - [ ] **Occupancy.** `occupancy_status` per vehicle and per carriage — "the front

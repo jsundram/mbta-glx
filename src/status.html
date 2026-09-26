@@ -31,6 +31,8 @@
   .row{display:flex;justify-content:space-between;padding:9px 0;
        border-top:1px solid var(--line);font-size:14px}
   .row:first-child{border-top:0}
+  .row.skipped{color:var(--dim)}
+  .row.skipped .v{text-decoration:line-through;opacity:.7}
   .list{background:var(--card);border:1px solid var(--line);border-radius:10px;
         padding:0 16px 6px;margin-bottom:12px}
   .listhead{font-size:11px;letter-spacing:.09em;text-transform:uppercase;
@@ -202,8 +204,11 @@ function paint() {
       (a.header || a.short || "").slice(0, 190)}</div>`).join("");
   drawMap();
   $("#following").innerHTML = (data.following || []).map(r =>
-    `<div class="row"><span class="k">${r.source}</span>`
-    + `<span class="v">${hhmm(r.eta)} &middot; ${mmss(Math.max(0, r.eta - now))}</span></div>`
+    r.skipped
+      ? `<div class="row skipped"><span class="k">not stopping here</span>`
+        + `<span class="v">${hhmm(r.eta)}</span></div>`
+      : `<div class="row"><span class="k">${r.source}</span>`
+        + `<span class="v">${hhmm(r.eta)} &middot; ${mmss(Math.max(0, r.eta - now))}</span></div>`
   ).join("") || `<div class="row"><span class="k">no further trains predicted</span></div>`;
 
   const u = data.upstream || {};

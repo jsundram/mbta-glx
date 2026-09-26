@@ -204,6 +204,46 @@ def _iso(s: str | None) -> float | None:
     return dt.datetime.fromisoformat(s).timestamp() if s else None
 
 
+_SKIP_CACHE: dict = {"t": 0.0, "trips": set()}
+
+
+def skipped_trips(stop: str = MAGOUN_IN, ttl: float = 30.0) -> set[str]:
+    """Trips MBTA has declared will NOT stop here.
+
+    Only the protobuf feed carries these: the v3 JSON API drops a stop_time_update
+    that has no times, which is exactly what a skipped stop looks like. Measured
+    lead time is poor -- the marker lands around two minutes before the scheduled
+    arrival and lingers for an hour -- so this is a confirmation, not a warning.
+    Its value is that it is DEFINITIVE, which the no-show veto never was.
+    """
+    now = time.time()
+    if now - _SKIP_CACHE["t"] < ttl:
+        return _SKIP_CACHE["trips"]
+    try:
+        from google.transit import gtfs_realtime_pb2 as pb
+        with urllib.request.urlopen(
+                "https://cdn.mbta.com/realtime/TripUpdates.pb", timeout=20) as r:
+            msg = pb.FeedMessage()
+            msg.ParseFromString(r.read())
+        # Both must be scoped to THIS stop. A system-wide CANCELED union pulled in
+        # 67 trips, nearly all of them other routes, against ~10 real skips a day.
+        trips = {
+            e.trip_update.trip.trip_id
+            for e in msg.entity
+            for su in e.trip_update.stop_time_update
+            if su.stop_id == stop and su.schedule_relationship == 1   # SKIPPED
+        } | {
+            e.trip_update.trip.trip_id
+            for e in msg.entity
+            if e.trip_update.trip.schedule_relationship == 3          # CANCELED
+            and any(su.stop_id == stop for su in e.trip_update.stop_time_update)
+        }
+    except Exception:  # noqa: BLE001 - absence of this must never break the ETAs
+        return _SKIP_CACHE["trips"]
+    _SKIP_CACHE.update(t=now, trips=trips)
+    return trips
+
+
 def schedule_today(day: dt.date) -> list[float]:
     cache = ROOT / "data" / "sched" / f"{day}.json"
     if cache.exists():
@@ -217,6 +257,19 @@ def schedule_today(day: dt.date) -> list[float]:
         cache.parent.mkdir(parents=True, exist_ok=True)
         cache.write_text(json.dumps(rows))
     return sorted(t for t in (_iso(r["arr"] or r["dep"]) for r in rows) if t)
+
+
+def schedule_rows(day: dt.date) -> list[tuple[float, str]]:
+    """(scheduled arrival, trip_id) so a slot can be matched against skips."""
+    cache = ROOT / "data" / "sched" / f"{day}.json"
+    if not cache.exists():
+        schedule_today(day)
+    try:
+        rows = json.loads(cache.read_text())
+    except Exception:  # noqa: BLE001
+        return []
+    out = [(_iso(r.get("arr") or r.get("dep")), r.get("trip")) for r in rows]
+    return sorted((t, tr) for t, tr in out if t)
 
 
 _ALERT_CACHE: dict = {"t": 0.0, "data": []}
@@ -396,7 +449,11 @@ def etas(snap: dict, model: Model, walk: int = DEFAULT_WALK,
     # 2. Trains already berthed at Medford/Tufts. Their departure is bounded below
     #    by the physical turnaround, which the timetable cannot express -- this is
     #    what fixes the case where a train is running behind schedule.
-    slots = schedule_today(dt.datetime.fromtimestamp(now, TZ).date())
+    day = dt.datetime.fromtimestamp(now, TZ).date()
+    skip = skipped_trips()
+    slot_rows = [(t, tr) for t, tr in schedule_rows(day) if tr not in skip]
+    slots = [t for t, _ in slot_rows]
+    dropped = [t for t, tr in schedule_rows(day) if tr in skip and t > now]
     turn_run, bias = model.berth_const
     covered = {r.get("vehicle") for r in rows}
     for vid, berth in berths.items():
@@ -427,6 +484,9 @@ def etas(snap: dict, model: Model, walk: int = DEFAULT_WALK,
                      "hi": s + model.sched_offset(qh),
                      "source": "schedule", "backed": backed, "vehicle": None})
 
+    for t in dropped:
+        rows.append({"eta": t, "lo": t, "hi": t, "source": "not stopping here",
+                     "backed": False, "vehicle": None, "skipped": True})
     rows.sort(key=lambda r: r["eta"])
     for r in rows:
         r["catchable"] = r["lo"] >= now + walk
