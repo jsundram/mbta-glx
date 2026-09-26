@@ -430,22 +430,27 @@ def upstream_state(snap: dict) -> dict:
     return out
 
 
-def etas(snap: dict, model: Model, walk: int = DEFAULT_WALK,
-         qs=(0.1, 0.5, 0.9), horizon: int = 45 * 60,
-         berths: dict[str, float] | None = None) -> list[dict]:
-    now = snap["t"]
+def compute_rows(now: float, preds: list, vehicles: list, model: Model,
+                 walk: int, qs, horizon: int, berths: dict,
+                 slots: list, skipped: set) -> list[dict]:
+    """Pure: everything the prediction needs is an argument, nothing is fetched.
+
+    This is the function a JavaScript frontend must reproduce exactly, so it takes
+    the schedule and the skip set as data rather than reading them. Keep it free of
+    I/O, clocks and globals -- `tests/fixtures/` pins its behaviour and the same
+    fixtures are what a JS port will be checked against.
+    """
     ql, qm, qh = qs
-    state = upstream_state(snap)
-    berths = berths or {}
+    state = upstream_state({"t": now, "vehicles": vehicles})
     rows: list[dict] = []
 
-    # 1. MBTA's own inbound predictions at Magoun -- the operator's model, use it first.
+    # 1. MBTA's own inbound predictions -- the operator's model, use it first.
     mbta = []
-    for p in snap["preds"]:
+    for p in preds:
         a, rel = p["attributes"], p["relationships"]
         if rel["stop"]["data"]["id"] != MAGOUN_IN or a["direction_id"] != 0:
             continue
-        t = _iso(a["arrival_time"] or a["departure_time"])
+        t = _iso(a.get("arrival_time") or a.get("departure_time"))
         if t and t > now:
             mbta.append((t, (rel.get("vehicle", {}).get("data") or {}).get("id")))
     for t, vid in sorted(mbta):
@@ -457,20 +462,15 @@ def etas(snap: dict, model: Model, walk: int = DEFAULT_WALK,
         rows.append({"eta": t, "lo": t - band, "hi": t + band,
                      "source": src, "backed": True, "vehicle": vid})
 
-    # 2. Trains already berthed at Medford/Tufts. Their departure is bounded below
-    #    by the physical turnaround, which the timetable cannot express -- this is
-    #    what fixes the case where a train is running behind schedule.
-    day = dt.datetime.fromtimestamp(now, TZ).date()
-    skip = skipped_trips()
-    all_rows = schedule_rows(day)
-    slots = [t for t, tr in all_rows if tr not in skip]
-    dropped = [t for t, tr in all_rows if tr in skip and t > now]
+    # 2. Trains already berthed at Medford/Tufts: departure is bounded below by
+    #    the physical turnaround, which the timetable cannot express.
     turn_run, bias = model.berth_const
+    slot_times = [t for t, _ in slots]
     covered = {r.get("vehicle") for r in rows}
-    for vid, berth in berths.items():
+    for vid, berth in sorted(berths.items(), key=lambda kv: kv[1]):
         if vid in covered:
-            continue                       # MBTA already predicts this one, sharper
-        nxt = [s for s in slots if s + bias > berth]
+            continue
+        nxt = [t for t in slot_times if t + bias > berth]
         base = berth + turn_run
         if nxt:
             base = max(base, nxt[0] + bias)
@@ -482,27 +482,48 @@ def etas(snap: dict, model: Model, walk: int = DEFAULT_WALK,
                      "source": "berthed at Medford/Tufts", "backed": True,
                      "vehicle": vid})
 
-    # 3. Schedule beyond everything we can physically see, corrected for bias.
+    # 3. Schedule beyond everything visible, corrected for measured bias.
     last = max([r["eta"] for r in rows], default=now)
-    for s in slots:
+    for s, trip in slots_with_trips(slots, skipped):
         mid = s + model.sched_offset(qm)
         if mid <= max(now, last + 120) or mid > now + horizon:
             continue
         backed = not (s - now < VETO_WINDOW and state["at_terminus"] == 0)
         if any(abs(r["eta"] - mid) < 240 for r in rows):
-            continue                       # something visible already times this train
+            continue
         rows.append({"eta": mid, "lo": s + model.sched_offset(ql),
                      "hi": s + model.sched_offset(qh),
                      "source": "schedule", "backed": backed, "vehicle": None})
 
-    for t in dropped:
+    for t in skipped_slot_times(slots, skipped, now):
         rows.append({"eta": t, "lo": t, "hi": t, "source": "not stopping here",
                      "backed": False, "vehicle": None, "skipped": True})
+
     rows.sort(key=lambda r: r["eta"])
     for r in rows:
+        r.setdefault("skipped", False)
         r["catchable"] = r["lo"] >= now + walk
         r["leave_in"] = r["lo"] - walk - now
     return rows
+
+
+def slots_with_trips(slots, skipped):
+    """Scheduled slots MBTA has not declared as skipping."""
+    return [(t, tr) for t, tr in slots if tr not in skipped]
+
+
+def skipped_slot_times(slots, skipped, now):
+    return [t for t, tr in slots if tr in skipped and t > now]
+
+
+def etas(snap: dict, model: Model, walk: int = DEFAULT_WALK,
+         qs=(0.1, 0.5, 0.9), horizon: int = 45 * 60,
+         berths: dict[str, float] | None = None) -> list[dict]:
+    """Thin wrapper: gather the I/O, then call the pure function."""
+    now = snap["t"]
+    day = dt.datetime.fromtimestamp(now, TZ).date()
+    return compute_rows(now, snap["preds"], snap["vehicles"], model, walk, qs,
+                        horizon, berths or {}, schedule_rows(day), skipped_trips())
 
 
 def render(rows: list[dict], now: float, walk: int) -> str:

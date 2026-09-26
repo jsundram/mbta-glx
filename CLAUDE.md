@@ -48,6 +48,16 @@ uv run --with pytest --with numpy --with polars python -m pytest tests/ -q
 8. **Timezone must be `ZoneInfo`**, never a fixed offset. EDT→EST flips
    2026-11-01.
 
+## The contract
+
+`service.compute_rows` is pure and is the function a JS frontend must reproduce
+exactly. `tests/fixtures/cases-*.json` pins it: real snapshots with every input
+inlined, plus expected rows. Run both implementations against these files.
+
+Regenerate fixtures deliberately (`src/make_fixtures.py`), never to make a failure
+go away — a regenerated fixture that drops a tier is how this test stops working
+without anyone noticing.
+
 ## Conventions
 
 - **polars** for anything that ships or is tested; **DuckDB** (`src/q.sh`) for

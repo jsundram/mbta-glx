@@ -130,13 +130,27 @@ backend serving `/status` — less work, gives up the static property.
 
 Each milestone is independently useful; nothing is a big-bang cutover.
 
-### M1 — Extract the contract *(no behaviour change)*
-- Move tier selection out of `service.etas` into a pure function over
-  `(snapshot, model, walk, q) → rows`, no I/O.
-- Capture ~20 real snapshots into `tests/fixtures/`.
-- Golden-file test over the fixtures.
+### M1 — Extract the contract *(no behaviour change)* — **done**
+- `service.compute_rows(now, preds, vehicles, model, walk, qs, horizon, berths,
+  slots, skipped) → rows` is pure: no clock, no network, no file reads. `etas()`
+  is now a thin wrapper that gathers the I/O.
+- `tests/fixtures/cases-*.json` — 26 real archived snapshots with everything
+  inlined (schedule, skip set, berth state, walk, clock), plus the expected rows.
+  Regenerate with `src/make_fixtures.py`, deliberately, never to silence a failure.
+- `tests/test_contract.py` — 53 assertions over them.
 
-**Done when:** the existing board is byte-identical and the golden test passes.
+**Sensitivity, measured by injecting drift:**
+
+| injected change | caught by |
+|---|---|
+| schedule offset +30 s | 24/24 cases |
+| berth offset +30 s | 2/24 cases |
+| veto window 480→900 s | 1/24 cases |
+
+Thin but real. The danger is not a weak test, it is a *regenerated* fixture set
+that quietly drops a tier — so `test_every_tier_is_exercised_by_some_fixture`
+asserts all six sources appear, and the generator synthesises a skipped-tier case
+because skips are too rare to catch by sampling.
 
 ### M2 — Static board *(the tablet dashboard becomes real)*
 - `web/app.js` ports the pure function; `web/board.html` is the current UI.
