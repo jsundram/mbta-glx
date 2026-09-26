@@ -137,6 +137,46 @@ the raw archive churns **13.8 MB/day** through sync. The 14-day prune holds it a
 
 ---
 
+## The Sep 26 – Oct 5 works: what it does to the data
+
+Nine days of Green Line suspension south of North Station, starting 03:00 on
+2026-09-26. **Magoun and Medford/Tufts keep running**, so the local prediction
+problem is unaffected in kind — but several fitted quantities are not safe to pool
+across it.
+
+| quantity | effect of the works |
+|---|---|
+| Magoun→downtown **ride times** | **absent**. No Green Line service to Park St, Govt Center, North Station, Haymarket, Boylston or Copley. Phase 3 gets nine dead days. |
+| schedule deviation, layover, berth rule | **suspect**. Trains will short-turn on an amended timetable; turnaround behaviour at the terminus is exactly what changes. |
+| headway, no-show rate | **suspect**, likely both worse than baseline. |
+| MBTA prediction error | **suspect**. Disruption is a different regime for their model too. |
+| run times Ball→Magoun, Medford→Magoun | **safe**. Physical, and that track is still in service. |
+
+**Consequence for Phase 1: its clock effectively restarts 2026-10-05.** Of the next
+two weeks, nine days are contaminated for everything except the physical run times.
+Pooling them would bias the very calibration Phase 1 exists to produce.
+
+- [x] **Archive alert state alongside the trains** (`record_rt.fetch_alerts`), so
+      disrupted periods are self-identifying later instead of being nine
+      unexplained days of odd numbers. Written only when the alert set changes.
+      LAMP does publish `LAMP_RT_ALERTS.parquet` (130 MB) as a historical fallback,
+      so unlike schedules this is recoverable — but not conveniently.
+- [ ] **Exclude 2026-09-26 → 2026-10-05 when fitting** anything but run times.
+
+### Storage
+
+Not a problem, and deliberately made bigger.
+
+| | per day | 30-day steady state |
+|---|---|---|
+| before | 13.8 MB | 0.41 GB |
+| now, with downtown platforms | **24.2 MB** | **0.73 GB** |
+
+The increase is a choice, not drift: 201 of the 245 predictions per snapshot are
+the downtown platforms the journey model needs, and those cannot be backfilled.
+Prune extended from 14 to 30 days so the works period survives long enough to be
+re-examined once we know what actually happened.
+
 ## Phase 1 — Accumulate  (passive, 2–4 weeks)
 
 Calendar time is the constraint for *volume*, but accumulating and testing are
