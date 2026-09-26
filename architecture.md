@@ -16,6 +16,7 @@ shape of the system and the order of work.
 │  board.html + app.js                                       │
 │    ├─ fetch  api-v3.mbta.com          live, CORS, no key   │
 │    ├─ fetch  model.json               fitted quantiles     │
+│    ├─ <script> model.js               same bytes, file://  │
 │    ├─ fetch  stats.json               how it has been doing│
 │    ├─ fetch  live-extras.json         skips (no CORS path) │
 │    └─ POST   ntfy.sh                  arm its own alerts   │
@@ -115,9 +116,10 @@ Mitigations, in order of importance:
 
 1. **Keep the JS thin.** It reads `model.json` and does arithmetic. Anything that
    fits, simulates, or scores stays in Python and never ships.
-2. **A contract test.** Fixed snapshots in `tests/fixtures/`, run through both
-   implementations, assert identical rows. This must exist before the JS port is
-   trusted, not after.
+2. **A contract test.** Done: `tests/fixtures/cases-*.json` run through both
+   implementations and `tests/test_contract.py` asserts identical rows, field for
+   field, for every case. `tests/run_cases.js` is the node side; the comparison
+   lives only in Python so "identical" has one definition. Sensitivity is in M2.
 3. **One source for the constants.** Done: `model.json` now carries a `constants`
    block — `veto_window_s`, `stale_vehicle_s`, `dedupe_s`, `min_gap_s`,
    `horizon_s`, the per-source `band_s`, and the stop ids. `service.py` reads them
@@ -154,30 +156,55 @@ that quietly drops a tier — so `test_every_tier_is_exercised_by_some_fixture`
 asserts all six sources appear, and the generator synthesises a skipped-tier case
 because skips are too rare to catch by sampling.
 
-### M2 — Static board *(the tablet dashboard becomes real)* ◀ next
+### M2 — Static board *(the tablet dashboard becomes real)* — **done**
 
-Port `service.compute_rows` to `web/app.js`. Everything it needs is already data:
+`web/board.html` + `web/app.js` run with no backend: `src/status.html` with its
+data source swapped, a 43-line diff. `app.js` is the port of `compute_rows`,
+`upstream_state`, `_live`, `_revenue`, `BerthTracker` and `ArrivalTracker`, plus
+the I/O that gathers what the pure function needs. Every constant is read from
+`model.json`; a missing one throws rather than falling back to a literal, because
+a silent default is how the two implementations would drift while both looked fine.
 
-- **Inputs** are exactly the fixture keys: `now, preds, vehicles, model, walk, qs,
-  horizon, berths, slots, skipped`. The fixtures hold v3-shaped `preds`/`vehicles`
-  — the same shape `api-v3.mbta.com` returns — so the JS can consume them directly
-  with no adapter.
-- **Constants** come from `model.json.constants`; do not re-type them.
-- **Helpers to port with it**: `upstream_state`, `_live` (stale positions),
-  `_revenue` (deadheads run express and must not satisfy the veto).
-- **Berth state** is observed across polls, not derivable from one snapshot —
-  `BerthTracker` has to be ported too, or the berth tier silently never fires.
-- **Reuse the UI**: `src/status.html` is the board; only its data source changes.
+**Contract test.** `tests/test_contract.py` runs all 28 fixture cases through node
+as well as Python and compares every field of every row. Sensitivity, measured by
+injecting drift into the JS:
 
-Then extend `tests/test_contract.py` to run `tests/fixtures/cases-*.json` through
-node as well as Python and assert identical rows.
+| injected change | caught by |
+|---|---|
+| schedule offset +30 s | 28/28 |
+| mbta band +1 s | 23/28 |
+| stale filter removed | 4/28 |
+| berth offset +30 s | 2/28 |
+| revenue filter removed | 2/28 |
+| veto window 480→900 s | 1/28 |
+
+The fixture set grew from 26 cases to 28 for the last row. Measured first: not one
+of the 26 real snapshots contained a `NON_REVENUE` vehicle, because GTFS-realtime
+has no revenue field at all, so the archive cannot carry one (`simulate.to_v3` says
+as much). Dropping the deadhead filter therefore changed nothing anywhere —
+invariant 7 failing silently in the implementation with no backtest behind it.
+`make_fixtures` now synthesises one case per day with a deadhead and a
+five-minute-stale ghost on the inbound approach, on the vehicles real predictions
+name, so forgetting either filter moves a row from ±75 s to ±7 s and fails. The 26
+pre-existing cases are byte-identical.
+
+**Two things were wrong until measured in a browser:**
+
+- A board opened as `file://` cannot fetch a sibling file at all — Chromium: `URL
+  scheme "file" is not supported`, before CORS is even reached. `fit.py` therefore
+  publishes `web/model.js` as well, the same bytes as a script, and `app.js` falls
+  back to it. Without it the static board never got a model.
+- Live predictions and vehicles *do* fetch cross-origin from a `file://` page, so
+  only the sibling assets needed the fallback. `stats.json` and `live-extras.json`
+  degrade to a hidden panel and an empty skip set.
+
+`tests/board_smoke.py` drives the real page (playwright, MBTA and ntfy stubbed,
+~90 s, not collected by pytest) and checks 18 properties of it, including the
+re-arm — measured at 60 s apart, which is the only reason to leave a tablet open.
 
 **Done when:** the board runs from `file://` with the Mac server stopped, an iPad
-left open keeps re-arming an alert, and both implementations agree on all 26
-fixtures.
-
-**Done when:** the board runs from `file://` with the Mac server stopped, and an
-iPad left open keeps re-arming an alert.
+left open keeps re-arming an alert, and both implementations agree on every
+fixture. All three verified.
 
 ### M3 — Publish pipeline
 - `publish.py` writes `model.json` + `stats.json` to the Pages repo.

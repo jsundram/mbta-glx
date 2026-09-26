@@ -699,11 +699,27 @@ The alternative — a thin backend serving `/status`, frontend stays dumb — is
 work today and gives up the static property the rider asked for. Not recommended,
 but it is the fallback if the JS port starts growing.
 
-- [ ] Port the tier selection to JS (lookup + arithmetic only, driven by model.json)
+- [x] **Port the tier selection to JS.** `web/app.js` + `web/board.html`: lookup and
+      arithmetic only, every constant read from `model.json`, and a missing constant
+      throws instead of falling back to a literal. Verified in a browser from
+      `file://` with the Mac server stopped — which turned up that a page opened off
+      the filesystem cannot fetch a sibling file at all (Chromium: `URL scheme
+      "file" is not supported`), so `fit.py` publishes `web/model.js` too.
+- [x] **A contract test that the JS and Python tier logic agree.** 28 fixtures
+      through both implementations, every field of every row compared; drift
+      injection table in architecture.md §4.
 - [ ] Backend publisher for `live-extras.json` (skips) every ~30 s
 - [ ] GitHub Actions: daily rollup, refit, commit `model.json` + `stats.json`
 - [ ] Pick the always-on host (Pi vs fly.io) — still the open Phase 5 decision
-- [ ] A contract test that the JS and Python tier logic agree on the same inputs
+- [ ] **A v3 sidecar for `revenue`.** Live serving already merges both feeds — v3
+      for predictions and positions, protobuf for `SKIPPED`/`CANCELED`. The archive
+      does not: GTFS-realtime's `VehiclePosition` has no revenue field, so no
+      archived snapshot can carry one and no sampled fixture can contain a deadhead
+      (measured: 0 of 26). Cheapest fix is a sidecar, not a second full capture —
+      poll v3 `/vehicles` every ~60 s for `(t, vehicle_id, revenue)` only, ~1,440
+      calls/day against the keyless 20 req/min limit, and join it in at rollup
+      rather than in the archiver (invariant 6: the archiver must stay dumb). Then
+      fixtures can sample real deadheads instead of synthesising them.
 
 ## Phase 5 — Delivery
 

@@ -16,7 +16,16 @@ uv run --with polars python src/server.py 8723   # then open:
 #   http://localhost:8723/board       live status board, self-updating
 #   http://localhost:8723/?walk=6     ETAs with leave-by times
 uv run python src/service.py 6                   # one-shot CLI, 6-minute walk
+open web/board.html                              # the same board, no server at all
 ```
+
+**The static board** (`web/`) needs no backend: it fetches `api-v3.mbta.com`
+directly and runs the same prediction in JavaScript, reading `model.json` for every
+fitted number and every constant. It works from `file://`, which is why the model
+is published twice — a page opened off the filesystem is not allowed to fetch a
+sibling file, so `web/model.js` carries the same bytes as a script. The two
+implementations are held together by `tests/test_contract.py`, which replays every
+fixture through node and Python and compares the rows field for field.
 
 **The board** leads with any service alert touching the Magoun-to-downtown
 corridor — suspensions and closures elsewhere on the Green Line are filtered out so
@@ -207,6 +216,8 @@ residual risk and what the "unconfirmed" flag is for.
 | `src/record_live.py` | older v3-API recorder, superseded by `record_rt.py` |
 | `src/validate_live.py` | calibrate prediction error vs. lead time |
 | `src/service.py`, `src/server.py`, `src/ui.html` | the live service |
+| `web/board.html`, `web/app.js` | the same board with no backend; `app.js` ports `compute_rows` |
+| `tests/run_cases.js`, `tests/board_smoke.py` | the JS side of the contract test; a browser check of the board |
 
 ## Historical feed archive: what exists
 

@@ -12,6 +12,7 @@ Regenerate deliberately, never to make a failure go away:
 import functools
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -124,6 +125,20 @@ def test_web_model_is_the_published_copy():
     assert json.loads((WEB / "model.json").read_text()) == \
         json.loads((service.ROOT / "data" / "model.json").read_text()), \
         "web/model.json is out of date: re-copy data/model.json after a refit"
+
+
+def test_web_model_script_is_the_same_bytes():
+    """web/model.js exists because a file:// board cannot fetch model.json at all.
+
+    Measured 2026-09-26 in Chromium: `URL scheme "file" is not supported`. It is a
+    third copy of the same bytes, so it has to be checked, not trusted.
+    """
+    js = (WEB / "model.js").read_text()
+    m = re.search(r"Magoun\._modelText = (\".*\");", js, re.S)
+    assert m, "web/model.js is not in the shape app.js expects"
+    assert json.loads(json.loads(m.group(1))) == \
+        json.loads((WEB / "model.json").read_text()), \
+        "web/model.js is stale: re-run src/fit.py"
 
 
 def test_model_carries_every_constant_the_port_needs():

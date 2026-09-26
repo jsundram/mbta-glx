@@ -18,6 +18,7 @@ uv run --with polars python src/server.py 8723   # /board, /status, /history, /a
 ./src/watch.sh plan park 09:00                   # arm the notifier
 ./src/q.sh "SELECT ... FROM pairs"               # ad-hoc SQL over the archive
 uv run --with pytest --with numpy --with polars python -m pytest tests/ -q
+node tests/run_cases.js data/model.json tests/fixtures/cases-*.json   # the JS side
 ./ops/install.sh                                 # (re)load the launchd agents
 ```
 
@@ -44,15 +45,21 @@ uv run --with pytest --with numpy --with polars python -m pytest tests/ -q
    clever.
 7. **Filter non-revenue and stale vehicles.** Deadheads run express and parked
    trains sit for hours with a frozen `updated_at`; both otherwise satisfy the
-   no-show veto. `revenue` exists in the v3 API and **not** in the protobuf feed.
+   no-show veto. `revenue` exists in the v3 API and **not** in the protobuf feed —
+   so the archive cannot carry it, no replayed or sampled fixture can contain a
+   deadhead (measured: 0 of 26), and dropping this filter used to break nothing in
+   any test. `make_fixtures` synthesises one deadhead-and-ghost case per day for
+   exactly this reason; do not let a regeneration drop it.
 8. **Timezone must be `ZoneInfo`**, never a fixed offset. EDT→EST flips
    2026-11-01.
 
 ## The contract
 
-`service.compute_rows` is pure and is the function a JS frontend must reproduce
-exactly. `tests/fixtures/cases-*.json` pins it: real snapshots with every input
-inlined, plus expected rows. Run both implementations against these files.
+`service.compute_rows` is pure and is the function `web/app.js` reproduces exactly.
+`tests/fixtures/cases-*.json` pins it: real snapshots with every input inlined, plus
+expected rows. `tests/test_contract.py` runs both implementations against these
+files and compares every field; `tests/run_cases.js` is the node side. Two of the 28
+cases are synthesised, not sampled — see invariant 7 below.
 
 Regenerate fixtures deliberately (`src/make_fixtures.py`), never to make a failure
 go away — a regenerated fixture that drops a tier is how this test stops working
@@ -80,6 +87,10 @@ without anyone noticing.
   never widen a re-match far enough to reach the next train (headway 528 s).
 - `cdn.mbta.com/*.pb` has **no CORS** and is the only source of `SKIPPED`
   markers. `api-v3.mbta.com` has `access-control-allow-origin: *`.
+- A page opened as `file://` **cannot fetch a sibling file** (Chromium: `URL scheme
+  "file" is not supported`) — CORS never enters into it. Hence `web/model.js`, the
+  same bytes as a script; `fit.py` writes it and a test compares them. Cross-origin
+  fetches to `api-v3.mbta.com` do work from `file://`.
 - The v3 `/schedules` endpoint only serves ~8 days back. Daily snapshots are the
   only way to keep them; an un-captured day is gone.
 
