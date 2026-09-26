@@ -12,7 +12,7 @@ shape of the system and the order of work.
 ## 1. Shape
 
 ```
-┌─ STATIC (GitHub Pages / Cloudflare Pages) ──────────── £0 ─┐
+┌─ STATIC (GitHub Pages: web/ uploaded as-is) ────────── £0 ─┐
 │  board.html + app.js                                       │
 │    ├─ fetch  api-v3.mbta.com          live, CORS, no key   │
 │    ├─ fetch  model.json               fitted quantiles     │
@@ -26,7 +26,8 @@ shape of the system and the order of work.
 │  record_rt.py   continuous capture  → data/live/       │   │
 │  rollup.py      distil + compact    → data/pairs/      │   │
 │  fit.py         refit per rating    → model.json       │   │
-│  publish.py     push artifacts to the static origin    │   │
+│  stats.py       score closed days   → stats.json       │   │
+│  publish.py     move artifacts to the static origin    │   │
 │  skips.py       live-extras.json every ~30 s           │   │
 │  watch.py       refine alerts, brief, recovery  ───────────┘
 └────────────────────────────────────────────────────────┘
@@ -97,6 +98,21 @@ the leave time.
 `web/board.html` reads these field names directly and hides its panel when the file
 is absent or unparseable — so a missing `stats.json` degrades quietly, but a
 *renamed* field shows an empty panel instead of failing. Keep the names.
+`tests/test_stats.py` pins them from both sides, reading the names out of
+board.html itself rather than a list typed twice.
+
+Where each field comes from, since they are not the same question (M3):
+
+| field | source | what it answers |
+|---|---|---|
+| `caught`, `of` | `replay.score` over `data/live` | of the trains that came, how many were announced in time |
+| `mean_platform_wait_s`, `mean_door_to_train_s` | `simulate.run` over `data/live` | what it costs once it fires — same riders for both, so their gap means something |
+| `by_lead` | `data/pairs`, never pruned | prediction error by how much warning it gave |
+
+The two means are `-1` when the window has no riders, not `null` and not `0`: the
+board would render `NaN min` for one and a free ride for the other. Each day's score
+is appended to `data/scores.jsonl`, so the window outlives the 90-day prune of the
+archive it was computed from.
 
 ### `data/pairs/*.parquet` — the long-term store
 
@@ -210,16 +226,98 @@ re-arm — measured at 60 s apart, which is the only reason to leave a tablet op
 left open keeps re-arming an alert, and both implementations agree on every
 fixture. All three verified.
 
-### M3 — Publish pipeline
-- `publish.py` writes `model.json`, `model.js` and `stats.json` to the Pages repo.
-  **All three**: a refit produces `data/model.json`, `web/model.json` and
-  `web/model.js` (the `file://` fallback), and a publisher that carries only the
-  first leaves the board predicting from the previous rating with nothing to show
-  it. `fit.py` already writes all three; `tests/test_contract.py` fails if the web
-  copies fall behind, so the publisher's job is to move them, not to derive them.
-- GitHub Actions: daily rollup, weekly drift check, refit on rating change.
+### M3 — Publish pipeline — **done**
 
-**Done when:** the static board is serving artifacts nobody copied by hand.
+**The static origin is `web/` in this repo.** `pages.yml` uploads that directory to
+Pages as-is, so board.html and app.js have no second copy to fall behind and there
+is no `docs/`. `publish.py --check` runs before the upload and fails the deploy on
+an incomplete origin.
+
+`publish.py` moves the published set and never derives it — a missing
+`data/model.json` is an error telling you to run `fit.py`. The set is an explicit
+manifest, each derived entry naming the file under `data/` it must equal:
+
+| published | must equal | why |
+|---|---|---|
+| `board.html`, `app.js` | — | authored in `web/`, which *is* the origin |
+| `model.json` | `data/model.json` | fitted quantiles, fetched |
+| `model.js` | `data/model.json`, script-wrapped | a `file://` board cannot fetch a sibling file at all |
+| `stats.json` | `data/stats.json` | the self-score |
+
+**A refit publishes three artifacts, not one.** A publisher carrying only
+`data/model.json` leaves the board predicting from the previous rating with nothing
+on screen to say so. `tests/test_publish.py` fails if the manifest loses one, and
+separately if the board starts fetching an asset the manifest does not carry.
+
+Write-only by default; `--commit` makes a local commit, scoped to its own paths;
+nothing ever pushes. `--to DIR` stages the set elsewhere, so Cloudflare or a second
+Pages repo stays available without rework.
+
+**`stats.json` reads two sources, because it answers two questions.**
+
+- **Coverage** — of the trains that came, how many were announced early enough to be
+  on the platform for — is `replay.score`, one rider per real arrival.
+- **Cost** — platform wait and door-to-train — is `simulate.run`, riders on a
+  five-minute grid through the real `compute_rows`. Both means come from the *same*
+  riders, so the gap between them means something. Platform wait alone rewards
+  dawdling; door-to-train is what stops it.
+- **`by_lead`** is prediction error, and `data/pairs` already holds exactly it. Pairs
+  is never pruned, so this is the half of the panel with a long memory.
+
+Measured over 2026-09-24/25: caught 185/198, platform wait 3.7 min, door-to-train
+15.6 min. Verified in a browser over HTTP, which is the only shape where the panel
+can appear at all.
+
+Three things the data settled:
+
+- **The window survives pruning.** Coverage and cost need the archive, which is
+  pruned at 90 days, so each day's score is appended to `data/scores.jsonl` the
+  first time it is computed and the window is aggregated from that. The archive
+  goes, the score stays.
+- **`by_lead` is capped at a 20 min lead.** `rollup` pairs each prediction with that
+  vehicle's *next* arrival, so a missed `STOPPED_AT` transition attributes it to the
+  following visit. |err| tops out near 620 s through the 15–20 min bin, then p50 is
+  −414 s at 20–30 min and −2188 s at 30–45 min. One such row inverts a bin, and the
+  feed's real reach here is 8–13 min anyway.
+- **Riders who decide overnight are not riders.** 47 of 286 on 2026-09-25 had
+  door-to-train up to 292 min, dragging the mean from 16.1 to 42.6. `simulate.run`
+  already drops anyone facing over an hour on the platform; door-to-train is held to
+  the same bound rather than inventing a service window.
+
+**Refit on rating change** is two halves, because they cannot run in the same place.
+`rating.yml` detects: MBTA's feed index republishes constantly — 1016 rows, 1016
+distinct `feed_start_date`s — so the identity watched is `(season, version,
+feed_end_date)`, which held across all 14 republishes of the current rating and
+changed at the Summer→Fall boundary. `feed_end_date` is also where **2026-12-12**
+comes from; it is not a date anybody typed in. `src/refit.sh` then runs on the
+capture host, because `fit.py` reads `data/magoun.parquet`, which only
+`build_dataset.py` writes and nothing schedules — so a refit is the dataset rebuild
+too. It halts before regenerating fixtures: a +30 s schedule shift fails all 28
+cases, and that failure is the contract test working. `--fixtures` is a second,
+deliberate run that prints the row diff.
+
+**The daily rollup is not a workflow, and cannot be.** `data/live`, `data/pairs` and
+`data/raw` are gitignored — large, churning daily — so the archive lives on the
+capture host and `src/daily.sh` does the rollup, the scoring and the origin check
+there. A scheduled job that rolled up an empty checkout would succeed every night
+and produce nothing, which is worse than not having it. A test asserts no workflow
+runs `rollup.py`, `stats.py`, `fit.py`, `build_dataset.py` or `make_fixtures.py`,
+and another asserts the premise it rests on.
+
+So CI does what needs no archive: the suite on every push, the same suite weekly as
+a drift check (a node release or a polars upgrade moving under a repo that did not
+change), and the rating watch. The node parity test used to *skip* when node was
+missing, which is indistinguishable from passing in a green log — it now fails when
+`CI` is set.
+
+The `revenue` sidecar in launch-plan is **later, not M3**. It changes what the
+archive records and what fixtures can sample, and touches nothing the publisher
+does.
+
+**Done when:** the static board is serving artifacts nobody copied by hand. Done —
+one open item: the repo has no git remote yet, so the workflows are committed but
+have never run. Add the remote, push, and set Pages → Build and deployment → Source
+→ GitHub Actions.
 
 ### M4 — `live-extras.json`
 - Small loop publishing skipped trips every ~30 s.
@@ -243,6 +341,7 @@ that slips.
 | always-on host | iPad kiosk · Raspberry Pi · fly.io / VPS | iPad covers refinement only; capture still needs a real host. Only M5 is blocked. |
 | archive retention | prune 90d · keep forever | compaction makes a full year ~0.46 GB; keeping everything is now affordable |
 | `data/live` location | inside Dropbox · outside | appended every 15 s; moving it out removes constant sync churn |
+| git remote | none yet | M3's workflows are committed but have never run. Needs a remote, a push, and Pages → Source → GitHub Actions. |
 
 ## 6. Explicit non-goals
 
@@ -251,6 +350,6 @@ own horizon — we relay it. A general transit app.
 
 ## 7. Sequencing note
 
-M1–M4 are unblocked. Phase 1 calibration is gated on the works ending **2026-10-05**
+M1–M3 are done; M4 is unblocked. Phase 1 calibration is gated on the works ending **2026-10-05**
 and a rating change on **2026-12-12** resets every schedule-dependent constant, so
 prefer shipping the structure now and re-fitting into it later.

@@ -19,6 +19,20 @@ uv run python src/service.py 6                   # one-shot CLI, 6-minute walk
 open web/board.html                              # the same board, no server at all
 ```
 
+Publishing it, on the host that holds the archive:
+
+```bash
+./src/daily.sh                                   # rollup, score, suite, origin check
+uv run python src/publish.py --check             # is web/ complete and current?
+uv run python src/publish.py --commit            # commit what moved; never pushes
+./src/refit.sh                                   # rebuild the dataset, refit, diff
+```
+
+`web/` **is** the static origin: a GitHub Actions workflow uploads it to Pages as-is,
+so there is no second copy of `board.html` to fall behind, and `publish.py --check`
+fails the deploy if any published artifact is stale or missing. `publish.py` moves
+files; `fit.py` and `stats.py` are what write them.
+
 **The static board** (`web/`) needs no backend: it fetches `api-v3.mbta.com`
 directly and runs the same prediction in JavaScript, reading `model.json` for every
 fitted number and every constant. It works from `file://`, which is why the model
@@ -197,6 +211,31 @@ median headway is 8.8 min, so arriving a minute late costs ~9 minutes.
 **~9.6% of scheduled inbound trains never appear at Magoun.** That is the main
 residual risk and what the "unconfirmed" flag is for.
 
+## How it has been doing
+
+The board scores itself daily and publishes the result as `stats.json`; the panel on
+the board is that file. Two questions, kept apart because they are not the same one:
+
+- **Coverage** — of the trains that actually came, how many did the app announce
+  early enough to be standing on the platform for? `src/replay.py`, one rider per
+  real arrival. **185 of 198** over 2026-09-24/25.
+- **Cost** — once it fires, how long do you stand there, and how long from deciding
+  to the doors? `src/simulate.py`, riders deciding every five minutes and following
+  the real prediction through every tier. **3.7 min** on the platform, **15.6 min**
+  door to train. Both from the same riders, which is the only way their difference
+  means anything — platform wait alone rewards dawdling, since a strategy that keeps
+  you home until it is certain scores perfectly on it while putting you on a later
+  train.
+
+`by_lead` is a third thing: raw prediction error by how much warning it gave, read
+straight out of `data/pairs`. It is capped at a 20-minute lead, because past that the
+rows are predictions mispaired to a vehicle's *next* visit rather than long-range
+predictions — p50 error is −414 s at 20–30 min and −2188 s at 30–45 min, against
+~620 s worst below that, and the feed's real reach on this platform is 8–13 min.
+
+Each day is scored once and appended to `data/scores.jsonl`, so the window survives
+the 90-day prune of the archive it was computed from.
+
 ## Layout
 
 | file | role |
@@ -211,6 +250,11 @@ residual risk and what the "unconfirmed" flag is for.
 | `src/simulate.py` | replay an archived day, score competing strategies |
 | `src/q.sh` | ad-hoc SQL over the archive (DuckDB); replaces `zcat \| grep` |
 | `src/replay.py` | score the last N trains against the leave-now advice |
+| `src/stats.py` | score closed days into `data/scores.jsonl` → `stats.json` |
+| `src/publish.py` | move the published set to the static origin; refuse a partial one |
+| `src/refit.sh`, `src/refit.py` | a deliberate refit, and the diffs to read before accepting it |
+| `src/rating.py` | watch for the schedule rating change that resets every constant |
+| `.github/workflows/` | suite + weekly drift, Pages deploy, rating watch |
 | `src/snapshot_schedule.py` | capture each day's schedule before the API drops it |
 | `src/daily.sh`, `ops/` | launchd agents for the archiver and daily maintenance |
 | `src/record_live.py` | older v3-API recorder, superseded by `record_rt.py` |

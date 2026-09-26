@@ -709,8 +709,31 @@ but it is the fallback if the JS port starts growing.
       through both implementations, every field of every row compared; drift
       injection table in architecture.md §4.
 - [ ] Backend publisher for `live-extras.json` (skips) every ~30 s
-- [ ] GitHub Actions: daily rollup, refit, commit `model.json` + `stats.json`
+- [x] **`stats.json`, and the publisher that moves it.** `src/stats.py` scores each
+      closed day once and appends it to `data/scores.jsonl`, so the window outlives
+      the 90-day prune of the archive it was computed from. Coverage comes from
+      `replay.score` (one rider per real arrival), cost from `simulate.run` (riders
+      on a five-minute grid, both means from the same riders), and `by_lead` from
+      `data/pairs`, which is never pruned. Measured 2026-09-24/25: caught 185/198,
+      platform wait 3.7 min, door-to-train 15.6 min. `src/publish.py` moves the
+      published set and refuses a partial one; write-only unless `--commit`, and it
+      never pushes.
+- [x] **GitHub Actions.** Not the daily rollup: `data/live`, `data/pairs` and
+      `data/raw` are gitignored, so CI has no archive and a nightly job over an empty
+      checkout would succeed while producing nothing. What runs there is what needs
+      no archive — the suite on every push, the same suite weekly as a drift check,
+      Pages uploading `web/` behind a `publish.py --check` gate, and the rating
+      watch. The rollup, the scoring and the refit run on the capture host
+      (`src/daily.sh`, `src/refit.sh`).
+- [x] **Detect the rating change.** `src/rating.py` watches
+      `(season, version, feed_end_date)` from MBTA's feed index. Not
+      `feed_start_date`: 1016 rows, 1016 distinct start dates, so that would fire
+      weekly and mean nothing. `feed_end_date` is where **2026-12-12** actually comes
+      from. A weekly workflow opens one issue when it moves; the refit itself needs
+      `data/raw` and runs on the host.
 - [ ] Pick the always-on host (Pi vs fly.io) — still the open Phase 5 decision
+- [ ] Add a git remote. M3's three workflows are committed but have never run; Pages
+      also needs Source → GitHub Actions set once.
 - [ ] **A v3 sidecar for `revenue`.** Live serving already merges both feeds — v3
       for predictions and positions, protobuf for `SKIPPED`/`CANCELED`. The archive
       does not: GTFS-realtime's `VehiclePosition` has no revenue field, so no
@@ -720,6 +743,8 @@ but it is the fallback if the JS port starts growing.
       calls/day against the keyless 20 req/min limit, and join it in at rollup
       rather than in the archiver (invariant 6: the archiver must stay dumb). Then
       fixtures can sample real deadheads instead of synthesising them.
+      **Explicitly after M3, not part of it:** it changes what the archive records
+      and what fixtures can sample, and touches nothing the publisher does.
 
 ## Phase 5 — Delivery
 

@@ -22,7 +22,23 @@ node tests/run_cases.js data/model.json tests/fixtures/cases-*.json   # the JS s
 ./ops/install.sh                                 # (re)load the launchd agents
 ```
 
+The publish pipeline (M3). The archive is gitignored and lives here, not in the
+repo, so everything that reads it runs on this host; CI only runs the suite.
+
+```bash
+./src/daily.sh                                   # rollup, score, suite, origin check
+uv run --with polars --with numpy python src/stats.py    # score closed days -> stats.json
+uv run python src/publish.py --check             # is web/ complete and current?
+uv run python src/publish.py --commit            # commit what moved; never pushes
+./src/refit.sh                                   # rebuild dataset, refit, diff, suite
+./src/refit.sh --fixtures                        # then, deliberately; read the row diff
+uv run python src/rating.py --check              # has the schedule rating moved?
+```
+
 `ops/install.sh` is idempotent and must not be run with `sudo`.
+
+`web/` **is** the static origin — Pages uploads it as-is. `publish.py` moves files
+and never derives them; `fit.py` and `stats.py` are what write `data/`.
 
 ## Invariants — breaking these fails silently
 
@@ -52,6 +68,20 @@ node tests/run_cases.js data/model.json tests/fixtures/cases-*.json   # the JS s
    exactly this reason; do not let a regeneration drop it.
 8. **Timezone must be `ZoneInfo`**, never a fixed offset. EDT→EST flips
    2026-11-01.
+9. **A skipped test is not a passing test.** The node parity test skips when node is
+   missing, which looks identical to green in a CI log while comparing nothing. It
+   fails instead when `CI` is set. Same shape as invariant 7: a check with nothing
+   behind it.
+10. **Score a day against *that day's* schedule.** `replay.score` defaulted to the
+    three most recent schedule snapshots, which silently drops the timetable tier for
+    an older day — and the timetable carries the horizon past ~13 min. Measured on
+    2026-09-24: pinned to its own day, 69/74 with 22 arrivals warned by the timetable
+    alone; pinned to the wrong day, 60/74 and the tier gone. Pass `day=`.
+11. **Predictions in `data/pairs` past ~20 min are mispairs, not long-range
+    predictions.** `rollup` pairs each prediction with that vehicle's *next* arrival,
+    so a missed `STOPPED_AT` transition attributes it to the following visit: p50 err
+    is −414 s at a 20–30 min lead and −2188 s at 30–45 min, against ~620 s worst
+    below that. Cap the lead before binning.
 
 ## The contract
 
