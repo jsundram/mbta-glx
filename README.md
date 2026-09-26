@@ -187,6 +187,7 @@ residual risk and what the "unconfirmed" flag is for.
 | `src/record_rt.py` | archive the raw GTFS-RT feeds (run continuously) |
 | `src/rollup.py` | distil raw archive to compact pairs; prune raw |
 | `src/simulate.py` | replay an archived day, score competing strategies |
+| `src/q.sh` | ad-hoc SQL over the archive (DuckDB); replaces `zcat \| grep` |
 | `src/replay.py` | score the last N trains against the leave-now advice |
 | `src/snapshot_schedule.py` | capture each day's schedule before the API drops it |
 | `src/daily.sh`, `ops/` | launchd agents for the archiver and daily maintenance |

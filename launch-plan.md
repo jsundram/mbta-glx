@@ -163,6 +163,40 @@ Pooling them would bias the very calibration Phase 1 exists to produce.
       so unlike schedules this is recoverable — but not conveniently.
 - [ ] **Exclude 2026-09-26 → 2026-10-05 when fitting** anything but run times.
 
+### Querying: DuckDB for exploration, polars for the pipeline
+
+Measured, not assumed:
+
+| task | DuckDB | polars |
+|---|---|---|
+| 35 LAMP parquet files, grouped aggregate | 0.02 s | 0.04 s |
+| unnest the gzipped archive, count skips at Magoun | **1.4 s** | needs a bespoke script |
+
+**Not a scale argument.** The data is tiny — pairs are ~250 MB/year and polars
+already lazy-scans parquet globs perfectly well. Both engines answer the same
+question in hundredths of a second.
+
+**It is an ergonomics argument, and a real one.** Nearly every analysis in this
+project began as a throwaway script wrapping
+`pl.concat([pl.read_parquet(f) for f in glob(...)])`. `src/q.sh` replaces that with
+one line of SQL, and it reads the nested `.jsonl.gz` archive directly — so it is
+also the honest replacement for `zcat | grep`.
+
+The split worth keeping:
+
+| | engine | why |
+|---|---|---|
+| pipeline (`fit`, `rollup`, `simulate`, service) | **polars** | typed, tested, same language as the rest; ships |
+| ad-hoc exploration | **DuckDB** (`src/q.sh`) | SQL over a glob beats boilerplate |
+
+Two conditions make this land better later than now, which is what "once we have
+stabilized" gets right: SQL rewards a schema that has stopped moving (ours changed
+three times in one day), and if the archive becomes parquet then DuckDB queries it
+with no reconstruction at all.
+
+`src/q.py` is deliberately analysis-only — nothing the live service or notifier
+imports touches it, so it adds nothing to the deploy footprint.
+
 ### Storage format: why JSONL, and where it is wrong
 
 Measured on a real day (320,622 prediction rows, 243,368 vehicle rows):
