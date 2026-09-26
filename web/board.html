@@ -207,18 +207,34 @@ document.addEventListener("visibilitychange", () => {
   poll();
 });
 
+// Ask for the command topic. Separate from the first-run prompt below, because
+// asking only there would never reach anyone who had used the bell before -- which
+// is everybody this feature is for. Their NTFY is already set, so that branch is
+// skipped forever, NTFY_CMD stays "" and the handoff silently never happens.
+// "no" is remembered, so declining does not mean being asked every time.
+function askForCmdTopic() {
+  if (NTFY_CMD || localStorage.getItem("magoun.cmd.declined")) return false;
+  const c = prompt("One-time setup: the ntfy COMMAND topic (MAGOUN_NTFY_CMD).\n\n"
+                   + "With it the notifier keeps refining this alert after you "
+                   + "close the page -- a slip, a no-show, the recovery. Without "
+                   + "it the bell is one scheduled push and nothing more.\n\n"
+                   + "Leave blank to skip; you will not be asked again.", "");
+  if (c === null) return false;
+  if (c.trim()) localStorage.setItem("magoun.cmd", c.trim());
+  else localStorage.setItem("magoun.cmd.declined", "1");
+  return true;
+}
+
 async function armAlert(next) {
   if (!NTFY) {
     const t = prompt("ntfy topic to notify (from ops/ntfy.env):", "");
     if (!t) return;
     localStorage.setItem("magoun.ntfy", t.trim());
-    // Optional second topic. With it, the notifier keeps refining this alert once
-    // the page closes; without it the bell is a scheduled push and nothing more.
-    const c = prompt("ntfy COMMAND topic, so the notifier can take over "
-                     + "(MAGOUN_NTFY_CMD; leave blank to skip):", "");
-    if (c && c.trim()) localStorage.setItem("magoun.cmd", c.trim());
+    askForCmdTopic();
     return location.reload();
   }
+  // An install that predates the handoff: ask once, then reload so NTFY_CMD binds.
+  if (!armed && askForCmdTopic()) return location.reload();
   const walk = Magoun.walkSeconds();
   const now = Math.round(Date.now()/1000);
   const leaveAt = Math.max(Math.round(next.lo - walk), now + 11);
@@ -298,7 +314,10 @@ function disarm() {
   if (NTFY_CMD) {
     fetch(`https://ntfy.sh/${NTFY_CMD}`, {
       method: "POST", headers: {"Priority": "min", "Title": "cmd"},
-      body: "cancel",
+      // `disarm`, not `cancel`: this fires automatically when the armed train
+      // passes, and `cancel` drops whatever plan is running -- including a
+      // `plan park 09:00` the bell never had anything to do with.
+      body: "disarm",
     }).catch(() => { /* tap Cancel on the notifier's next push instead */ });
   }
   armed = false;

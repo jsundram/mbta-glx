@@ -657,3 +657,69 @@ def test_a_real_fault_is_not_counted_as_throttling(w, feed, monkeypatch, capsys)
     monkeypatch.setattr(w, "tick", lambda: (_ for _ in ()).throw(ValueError("boom")))
     assert watch.run_tick(w, 3) == 3, "a different fault must not advance the count"
     assert "tick error: ValueError" in capsys.readouterr().err
+
+
+# --- review round 2: which plan may a command from the board touch? ---
+
+def test_the_bell_cannot_wipe_a_brief_that_has_not_been_picked_yet(w, feed):
+    """`plan park 09:00` writes committed=None and sends the brief; the plan only
+    gains a commitment when the rider taps a pick button. Guarding on `committed`
+    left exactly that window open -- and the tablet arms into it every 60 s."""
+    watch.save({"dest": "70199", "deadline": feed.now + 3600, "conf": 0.9,
+                "walk": 390, "committed": None, "left_at": None, "fired": {},
+                "created": feed.now,
+                "options": [{"eta": feed.now + 900, "p": 0.94, "vehicle": None}]})
+    w.on_command(f"arm {int(feed.now + 800)} -", {})
+    p = watch.load()
+    assert p["dest"] == "70199"
+    assert p["options"], "the brief's options must survive; pick N still refers to them"
+
+
+def test_a_heartbeat_is_matched_against_what_the_board_keeps_sending(w, feed):
+    """The board re-sends the ETA it armed, forever. The notifier's target follows
+    the live train. Comparing the two means that once the train slips past MATCH
+    the heartbeat looks like a NEW arm: fired is cleared, leave-now fires again,
+    and the target is dragged back. The live run on 2026-09-26 slipped 658 s."""
+    armed = feed.now + 1200
+    watch.save({"dest": None, "deadline": feed.now + 3000, "conf": None, "walk": 390,
+                "committed": {"target_eta": armed + 658, "original_eta": armed,
+                              "vehicle": None, "at": feed.now, "misses": 0},
+                "left_at": feed.now - 60, "fired": {"leave": True},
+                "created": feed.now, "options": [], "armed_by": "board"})
+    w.on_command(f"arm {int(armed)} -", {})           # unchanged heartbeat
+    p = watch.load()
+    assert p["fired"] == {"leave": True}, "leave-now would fire a second time"
+    assert p["committed"]["target_eta"] == armed + 658, "dragged back to a stale ETA"
+    assert p["left_at"] is not None, "forgot the rider said they were on their way"
+
+
+def test_the_boards_disarm_leaves_a_destination_plan_alone(w, feed):
+    """paint() disarms when the armed train passes, and that posted `cancel`,
+    which unlinks any plan at all -- deleting a `plan park 09:00` through the
+    other door from the guard that exists to protect it."""
+    watch.save({"dest": "70199", "deadline": feed.now + 3600, "conf": 0.9,
+                "walk": 390, "committed": {"target_eta": feed.now + 900,
+                                           "original_eta": feed.now + 900,
+                                           "vehicle": "G-1", "at": feed.now,
+                                           "misses": 0},
+                "left_at": None, "fired": {}, "created": feed.now, "options": []})
+    w.on_command("disarm", {})
+    assert watch.load()["dest"] == "70199", "the board may only drop its own alert"
+    assert feed.sent == [], "and it is not the rider asking, so say nothing"
+
+
+def test_the_boards_disarm_does_drop_the_boards_own_alert(w, feed):
+    w.on_command(f"arm {int(feed.now + 900)} G-1", {})
+    assert watch.load()["armed_by"] == "board"
+    w.on_command("disarm", {})
+    assert watch.load() == {}
+
+
+def test_the_cancel_button_still_cancels_whatever_is_running(w, feed):
+    """A person looking at a notification and tapping Cancel means all of it."""
+    watch.save({"dest": "70199", "deadline": feed.now + 3600, "conf": 0.9,
+                "walk": 390, "committed": None, "left_at": None, "fired": {},
+                "created": feed.now, "options": []})
+    w.on_command("cancel", {})
+    assert watch.load() == {}
+    assert feed.titles == ["Cancelled"]

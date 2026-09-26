@@ -9,7 +9,7 @@ Notification budget (launch-plan.md, decision 1): 4 normal, 6 worst case.
 Commands arrive on the ntfy command topic -- from action buttons on the phone, and
 from the board's bell, which is how an alert armed on a page that then closes keeps
 being refined:
-  arm <eta> [vehicle] | pick N | left | bump | cancel | brief | status
+  arm <eta> [vehicle] | pick N | left | bump | disarm | cancel | brief | status
 """
 import datetime as dt
 import json
@@ -160,13 +160,23 @@ class Watcher:
         as a tablet was open, which made a destination plan impossible to keep.
         """
         p = load()
-        if p.get("dest") and p.get("committed"):
+        if p.get("dest"):
+            # Not `and p.get("committed")`: new_plan writes committed=None and
+            # sends the brief, so that test left the plan unguarded for exactly as
+            # long as the rider takes to pick -- and the tablet arms into that
+            # window every 60 s, deleting the options the pick buttons refer to.
             log(f"  (arm {fmt(eta)} ignored: a plan for {p['dest']} is active)")
             return p
         com = (p or {}).get("committed") or {}
+        # Against `original_eta`, NOT the live target. The board re-sends the ETA it
+        # armed and never updates it, while the target follows the train -- so
+        # comparing the two made a heartbeat look like a new arm as soon as the
+        # train slipped past MATCH, clearing `fired` (leave-now fires twice),
+        # forgetting an adopted train and dragging the target back. The live run on
+        # 2026-09-26 slipped 658 s, so this is where trains actually go.
         same = com and (
             (vehicle and com.get("vehicle") == vehicle)
-            or abs(com.get("target_eta", 0) - eta) <= MATCH)
+            or abs(com.get("original_eta", 0) - eta) <= MATCH)
         if same:
             # A repeat arm is a heartbeat, not new information. The board sends the
             # train it armed, unchanged, because ntfy does not replay for anonymous
@@ -567,7 +577,19 @@ class Watcher:
             later = [i for i, o in enumerate(p["options"]) if o["eta"] > cur + 60]
             if later:
                 return self.commit(p, later[0])
+        elif cmd == "disarm":
+            # From the board, automatically, when its armed train has come and
+            # gone. Only the board's own alert may be dropped this way: `cancel`
+            # deletes any plan at all, so sending that from paint() destroyed a
+            # `plan park 09:00` through the other door from the guard in
+            # arm_train. No push either -- nobody asked for this one.
+            if p.get("armed_by") == "board":
+                STATE.unlink(missing_ok=True)
+                log("  (the board disarmed its own alert)")
+            else:
+                log("  (disarm ignored: the running plan is not the board's)")
         elif cmd == "cancel":
+            # A person looking at a notification and tapping Cancel means all of it.
             STATE.unlink(missing_ok=True)
             return lambda: notify.send("Cancelled", "Not watching anything.",
                                        priority=2)

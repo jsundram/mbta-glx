@@ -107,6 +107,58 @@ def dwell_scenario(browser, check) -> None:
     page.close()
 
 
+def upgrade_scenario(browser, check) -> None:
+    """A board that was set up before the handoff existed.
+
+    Everyone who has ever used the bell already has `magoun.ntfy` in localStorage,
+    so the first-run prompt never runs again for them. Asking for the command topic
+    only there meant the handoff silently never happened for the entire population
+    the feature is for -- and the main scenario below cannot see it, because it
+    seeds `magoun.cmd` itself.
+    """
+    fixture = sorted((ROOT / "tests" / "fixtures").glob("cases-*.json"))[0]
+    case = json.loads(fixture.read_text())[0]
+    live = shifted(case, time.time() - case["now"] + 30)
+    page = browser.new_page()
+    # Guarded: add_init_script runs on EVERY navigation, and answering the prompt
+    # reloads the page. Unguarded, it wipes the topic the page just stored.
+    page.add_init_script(f"""
+      if (!localStorage.getItem("magoun.smoke.seeded")) {{
+        localStorage.setItem("magoun.smoke.seeded", "1");
+        localStorage.setItem("magoun.ntfy", "smoke-test-topic");
+        localStorage.setItem("magoun.walk", "{WALK_S}");
+        localStorage.removeItem("magoun.cmd");
+        localStorage.removeItem("magoun.cmd.declined");
+        localStorage.removeItem("magoun.armed");
+        localStorage.removeItem("magoun.berths");
+      }}
+    """)
+    stub(page, live)
+    posts = []
+    page.route(re.compile(r"ntfy\.sh"), lambda r: (
+        posts.append(r.request.url), r.fulfill(status=200, json={"id": "stub"})))
+    asked = []
+    page.on("dialog", lambda d: (asked.append(d.message),
+                                 d.accept("smoke-upgrade-cmd")))
+    page.goto(BOARD)
+    page.wait_for_timeout(5000)
+    print("\n  a board set up before the handoff existed")
+    page.click("#bell")                      # prompts, stores, then reloads
+    page.wait_for_timeout(6000)
+    check("it asks an existing install for the command topic",
+          any("COMMAND topic" in m for m in asked), f"{len(asked)} dialog(s)")
+    check("and remembers it",
+          page.evaluate("localStorage.getItem('magoun.cmd')") == "smoke-upgrade-cmd",
+          str(page.evaluate("localStorage.getItem('magoun.cmd')")))
+    posts.clear()
+    page.click("#bell")                      # now it arms, and hands off
+    page.wait_for_timeout(3000)
+    check("so the handoff then reaches the command topic",
+          any("smoke-upgrade-cmd" in u for u in posts),
+          f"{len(posts)} ntfy posts")
+    page.close()
+
+
 def served_scenario(browser, check) -> None:
     """The same page over HTTP, which is the only place the self-score can appear.
 
@@ -308,6 +360,7 @@ def run(case_index: int, headed: bool) -> int:
         check("the self-score panel hides itself from file://",
               page.is_hidden("#hist"))
         dwell_scenario(browser, check)
+        upgrade_scenario(browser, check)
         served_scenario(browser, check)
         browser.close()
 
