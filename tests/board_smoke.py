@@ -120,10 +120,14 @@ def served_scenario(browser, check) -> None:
     import threading
 
     stats = json.loads((ROOT / "web" / "stats.json").read_text())
-    handler = functools.partial(http.server.SimpleHTTPRequestHandler,
-                                directory=str(ROOT / "web"))
-    # Quiet: the request log would bury the checks.
-    handler.log_message = lambda *a, **k: None
+    # Quiet: the request log would bury the checks. This has to be a subclass --
+    # setting .log_message on a functools.partial succeeds silently and does
+    # nothing, because the partial is not the handler class.
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *a, **k):
+            pass
+
+    handler = functools.partial(Quiet, directory=str(ROOT / "web"))
     with socketserver.TCPServer(("127.0.0.1", 0), handler) as httpd:
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         port = httpd.server_address[1]

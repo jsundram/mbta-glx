@@ -432,9 +432,13 @@ async function history() {
            + `<span class="o ${cls}">p50 ${b.p50 > 0 ? "+" : ""}${b.p50}s `
            + `<span style="opacity:.6">(${b.p10}&hellip;${b.p90})</span></span></div>`;
     }).join("") || `<div class="hrow"><span class="t">no scored days yet</span></div>`;
+    // Negative is the publisher's "absent", for a window that scored no riders.
+    // (x/60).toFixed(1) would render -1 as "-0.0 min", which reads as a real
+    // measurement of nothing; 0 would read as a free ride.
+    const mins = s => s < 0 ? "—" : (s/60).toFixed(1) + " min";
     $("#histScore").textContent =
-      `caught ${d.caught}/${d.of} · wait ${(d.mean_platform_wait_s/60).toFixed(1)} min`
-      + ` · door-to-train ${(d.mean_door_to_train_s/60).toFixed(1)} min`
+      `caught ${d.caught}/${d.of} · wait ${mins(d.mean_platform_wait_s)}`
+      + ` · door-to-train ${mins(d.mean_door_to_train_s)}`
       + ` · ${d.window_days}d to ${d.as_of}`;
     $("#hist").hidden = false;
   } catch (e) { $("#hist").hidden = true; }

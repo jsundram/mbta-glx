@@ -25,23 +25,33 @@ SCALARS = ("n_legs", "days", "headway_median_s")
 MARKS = ((0.10, "q10"), (0.50, "q50"), (0.90, "q90"))
 
 
-def _at(model: dict, q: list[float], p: float) -> float:
-    grid = model["grid"]
+def _at(grid: list[float], q: list[float], p: float) -> float:
+    """The quantile nearest p, looked up in the grid that array was written with.
+
+    Each side must be indexed by its OWN grid. Using the new grid for both dies with
+    an IndexError the moment a refit makes the grid finer -- and because the
+    exception aborts model_diff, the refit that most needs reading would print a
+    traceback instead of a diff.
+    """
     i = min(range(len(grid)), key=lambda j: abs(grid[j] - p))
     return q[i]
 
 
-def _band(model: dict, before: dict, after: dict, name: str) -> list[str]:
+def _band(bm: dict, am: dict, before: dict, after: dict, name: str) -> list[str]:
     out = []
     dn = after["n"] - before["n"]
-    moves = [(lab, _at(model, after["q"], p) - _at(model, before["q"], p))
+    moves = [(lab, _at(am["grid"], after["q"], p) - _at(bm["grid"], before["q"], p))
              for p, lab in MARKS]
-    worst = max(abs(x - y) for x, y in zip(before["q"], after["q"])) \
-        if len(before["q"]) == len(after["q"]) else float("inf")
-    if any(abs(d) >= 0.5 for _, d in moves) or worst >= 0.5 or dn:
+    # Element-wise "worst" only means something when both arrays are on the same
+    # grid. If the grid changed, the marked quantiles above are the comparison.
+    same_grid = len(before["q"]) == len(after["q"]) and bm.get("grid") == am.get("grid")
+    worst = max((abs(x - y) for x, y in zip(before["q"], after["q"])), default=0.0) \
+        if same_grid else None
+    if any(abs(d) >= 0.5 for _, d in moves) or (worst or 0.0) >= 0.5 or dn or not same_grid:
         out.append(f"  {name:22s} n {before['n']:6d} -> {after['n']:<6d} ({dn:+d})  "
                    + "  ".join(f"{lab} {d:+7.1f}s" for lab, d in moves)
-                   + f"   worst {worst:+.1f}s")
+                   + (f"   worst {worst:+.1f}s" if worst is not None
+                      else "   worst n/a (regridded)"))
     return out
 
 
@@ -55,7 +65,7 @@ def model_diff(before: dict, after: dict) -> list[str]:
             lines.append(f"  {k:22s} {before.get(k)} -> {after.get(k)}")
     for k in FLAT_KEYS:
         if k in before and k in after:
-            lines += _band(after, before[k], after[k], k)
+            lines += _band(before, after, before[k], after[k], k)
         elif (k in before) != (k in after):
             lines.append(f"  {k:22s} {'REMOVED' if k in before else 'ADDED'}")
     for group in GRID_KEYS:
@@ -65,7 +75,7 @@ def model_diff(before: dict, after: dict) -> list[str]:
                 lines.append(f"  {group}.{name:16s} "
                              f"{'REMOVED -- a tier the board still selects' if name in b else 'ADDED'}")
             else:
-                lines += _band(after, b[name], a[name], f"{group}.{name}")
+                lines += _band(before, after, b[name], a[name], f"{group}.{name}")
     cb = before.get("constants", {})
     ca = after.get("constants", {})
     for name in sorted(set(cb) | set(ca)):

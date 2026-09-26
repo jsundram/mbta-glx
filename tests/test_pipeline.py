@@ -164,6 +164,17 @@ def test_the_rating_workflow_reads_the_scripts_exit_code_not_tees():
     assert "| tee" not in s
 
 
+def test_the_rating_workflow_can_actually_open_the_first_issue():
+    """`jq '.[0].number'` prints the literal "null" for an empty list.
+
+    `[ -n "null" ]` is true, so the very first rating change would run
+    `gh issue comment null`, fail, and never create the issue -- leaving a red
+    workflow as the only signal that every fitted constant is now wrong.
+    """
+    s = _steps("rating.yml")
+    assert "number // empty" in s, "an empty issue list yields \"null\", not \"\""
+
+
 def test_the_rating_workflow_uses_only_the_builtin_token():
     assert "secrets.GITHUB_TOKEN" in _wf("rating.yml")
     assert len([l for l in _wf("rating.yml").splitlines()

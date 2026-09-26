@@ -230,6 +230,19 @@ def test_commit_is_a_no_op_when_nothing_moved(repo):
     assert len([l for l in _log(repo) if l]) == 1
 
 
+def test_commit_bails_when_no_artifact_exists(repo):
+    """An empty pathspec inverts the scoping instead of narrowing it.
+
+    `git add` with no paths is a no-op, `git diff --cached --` then lists the whole
+    index, and `git commit --` commits it -- the exact sweep the scoping prevents.
+    """
+    import subprocess
+    (repo / "notes.md").write_text("mine")
+    subprocess.run(["git", "-C", str(repo), "add", "notes.md"], check=True)
+    assert publish.commit([repo / "web" / "does-not-exist.json"]) is False
+    assert len([l for l in _log(repo) if l]) == 1, "committed with an empty pathspec"
+
+
 def test_commit_leaves_unrelated_staged_work_alone(repo):
     """Publishing must not sweep whatever else you had staged into its commit."""
     import subprocess

@@ -26,11 +26,20 @@ def _schedule_slots(day: str | None = None) -> list[float]:
     warned by it alone. A scorer that walks a window must pass the day.
     """
     out: list[float] = []
-    files = ([SCHED / f"{day}.json.gz"] if day
-             else sorted(SCHED.glob("*.json.gz"))[-3:])
+    if day:
+        # A pinned day with no snapshot must not quietly become "no timetable".
+        # Silently returning zero slots is the same failure as pinning the wrong
+        # day: the schedule tier vanishes and coverage undercounts, and stats.py
+        # would then write that score down as final.
+        files = [SCHED / f"{day}.json.gz"]
+        if not files[0].exists():
+            raise FileNotFoundError(
+                f"no schedule snapshot for {day}: {files[0]}. The v3 /schedules "
+                "endpoint only serves ~8 days back, so an un-captured day is gone "
+                "and cannot be scored against its timetable.")
+    else:
+        files = sorted(SCHED.glob("*.json.gz"))[-3:]
     for f in files:
-        if not f.exists():
-            continue
         with gzip.open(f, "rt") as fh:
             for r in json.load(fh):
                 if r.get("stop") == MAGOUN_IN and (r.get("arr") or r.get("dep")):

@@ -29,6 +29,7 @@ Usage:
   python src/stats.py --force          # rescore days already in the scoreboard
 """
 import argparse
+import datetime as dt
 import json
 import pathlib
 import re
@@ -56,15 +57,23 @@ MAGOUN_IN = "70508"
 # 2026-09-24, Magoun inbound: |err| tops out at ~620 s through the 15-20 min bin
 # and then explodes -- p50 -414 s at 20-30 min, -2188 s at 30-45 min. The feed's
 # real reach on this platform is 8-13 min (CLAUDE.md), so nothing true is lost.
-MAX_LEAD_S = 1200
 LEAD_BINS = [(0, 300, "0-5min"), (300, 600, "5-10min"),
              (600, 900, "10-15min"), (900, 1200, "15-20min")]
+# Derived, not repeated. As two independent numbers these drifted by one: the filter
+# kept `lead_s <= 1200` while the last bin was [900, 1200), so a row at exactly the
+# cap passed the filter and landed in no bin at all.
+MAX_LEAD_S = LEAD_BINS[-1][1]
 
 
 def archives() -> dict[str, pathlib.Path]:
-    """Every archived day, in whichever form it is stored, newest form winning."""
+    """Every archived day, in whichever form it is stored.
+
+    Compaction deletes the raw file, so the two forms coexist for a day only
+    transiently. The compacted directory wins when they do -- it is the form that
+    survived the round-trip check.
+    """
     out: dict[str, pathlib.Path] = {}
-    for p in sorted(list(LIVE.glob("rt-*.jsonl*.gz")) + list(LIVE.glob("day=*"))):
+    for p in sorted(LIVE.glob("rt-*.jsonl*.gz")) + sorted(LIVE.glob("day=*")):
         m = re.search(r"(\d{4}-\d{2}-\d{2})", p.name)
         if m:
             out[m.group(1)] = p
@@ -84,12 +93,18 @@ def score_day(day: str, path: pathlib.Path, walk: int) -> dict:
     told = [r for r in rows if r["told"] is not None]
 
     # The rider grid replays compute_rows, which reaches for live skip markers.
-    # Freeze that: a score of a past day must not depend on today's network.
-    service.skipped_trips = lambda *a, **k: set()
-    model = service.Model()
-    waits = simulate.run(day, simulate.make_strategy(model, 0.10,
-                                                     ("mbta", "schedule"), walk), walk)
-    simulate._ADAPTED.clear()          # one adapted day is ~5,700 snapshots
+    # Freeze that: a score of a past day must not depend on today's network. Restored
+    # afterwards, because this is a module-wide patch and a later caller in the same
+    # process would otherwise silently inherit a service with no skip lookup.
+    real_skipped = service.skipped_trips
+    try:
+        service.skipped_trips = lambda *a, **k: set()
+        model = service.Model()
+        waits = simulate.run(day, simulate.make_strategy(
+            model, 0.10, ("mbta", "schedule"), walk), walk)
+    finally:
+        service.skipped_trips = real_skipped
+        simulate._ADAPTED.clear()      # one adapted day is ~5,700 snapshots
     # A rider who decides at 02:15 and boards at 05:10 is not a rider. simulate.run
     # already drops anyone facing over an hour on the platform; hold door-to-train
     # to the same hour rather than inventing a service window. Measured on
@@ -115,8 +130,16 @@ def read_scores() -> dict[str, dict]:
 
 
 def write_scores(scores: dict[str, dict]) -> None:
-    SCORES.write_text("".join(
+    """Replace the scoreboard atomically.
+
+    Once data/live is pruned this file is the only copy of a score, so a truncating
+    in-place rewrite is the one thing it must not be: a crash or a full disk midway
+    loses every day at once. Write beside it and rename.
+    """
+    tmp = SCORES.with_suffix(".jsonl.tmp")
+    tmp.write_text("".join(
         json.dumps(scores[d], separators=(",", ":")) + "\n" for d in sorted(scores)))
+    tmp.replace(SCORES)
 
 
 def by_lead(days: list[str]) -> list[dict]:
@@ -127,7 +150,9 @@ def by_lead(days: list[str]) -> list[dict]:
         return []
     df = (pl.concat([pl.read_parquet(f) for f in files])
           .filter((pl.col("stop") == MAGOUN_IN) & (pl.col("dir") == 0)
-                  & (pl.col("lead_s") <= MAX_LEAD_S)))
+                  # `<`, not `<=`: the last bin is [900, 1200), so a row at
+                  # exactly the cap would pass the filter and land in no bin.
+                  & (pl.col("lead_s") < MAX_LEAD_S)))
     out = []
     for lo, hi, name in LEAD_BINS:
         b = df.filter(pl.col("lead_s").is_between(lo, hi, closed="left"))
@@ -172,7 +197,10 @@ def main() -> None:
                     help="rescore days already in the scoreboard")
     a = ap.parse_args()
 
-    today = time.strftime("%Y-%m-%d")
+    # Invariant 8: a real zone, never the host's local date. Archive filenames are
+    # ET service days; on a UTC clock "today" flips at 20:00 ET, so the still-open
+    # day would not be skipped and its partial score would be written down as final.
+    today = dt.datetime.now(service.TZ).date().isoformat()
     scores = read_scores()
     for day, path in sorted(archives().items()):
         if day == today:
@@ -181,12 +209,27 @@ def main() -> None:
         if day in scores and not a.force:
             continue
         t0 = time.time()
-        scores[day] = score_day(day, path, a.walk)
+        try:
+            scores[day] = score_day(day, path, a.walk)
+        except FileNotFoundError as e:
+            # Loud and repeated every run, deliberately. Recording a score computed
+            # without the timetable tier would undercount coverage permanently,
+            # because a day already in the scoreboard is never rescored.
+            print(f"{day}: SKIPPED -- {e}")
+            continue
         r = scores[day]
         print(f"{day}: caught {r['caught']}/{r['told']} of {r['arrivals']} arrivals, "
               f"{r['riders']} riders, {time.time() - t0:.1f}s")
-    write_scores(scores)
+        # Flushed per day: a failure on the fifth day must not discard the four
+        # already computed, and this file is the only copy once live is pruned.
+        write_scores(scores)
 
+    window = sorted(scores)[-a.days:]
+    walks = {scores[d]["walk_s"] for d in window}
+    if len(walks) > 1:
+        print(f"WARNING: the window mixes walk times {sorted(walks)}; the two means "
+              f"average riders who were told to leave at different thresholds. "
+              f"Rescore with --force --walk to make them comparable.")
     stats = build(scores, a.days)
     if stats is None:
         print("no closed day has been scored yet; not writing stats.json")

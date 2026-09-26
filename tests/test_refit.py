@@ -9,6 +9,8 @@ import json
 import pathlib
 import sys
 
+import pytest
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 
 import refit  # noqa: E402
@@ -70,6 +72,28 @@ def test_a_changed_grid_is_called_out():
     """Every consumer indexes the quantile arrays by this grid."""
     after = _model(grid=[round(0.05 * i, 3) for i in range(1, 20)])
     assert any("GRID CHANGED" in l for l in refit.model_diff(_model(), after))
+
+
+def _regridded(n):
+    """A model whose quantile arrays are as long as its grid."""
+    grid = [round(i / (n + 1), 4) for i in range(1, n + 1)]
+    band = {"n": 10, "q": [float(i) for i in range(n)]}
+    return {"grid": grid, "tiers": {"ball_dep": dict(band)}, "sched": dict(band),
+            "berth": dict(band), "rides": {}}
+
+
+@pytest.mark.parametrize("before_n,after_n", [(19, 49), (49, 19)])
+def test_a_regrid_diffs_instead_of_crashing(before_n, after_n):
+    """Each side has to be indexed by its OWN grid.
+
+    Looking both arrays up through the new grid raises IndexError as soon as the grid
+    gets finer, and because that aborts model_diff the refit that most needs reading
+    prints a traceback instead of a diff.
+    """
+    lines = refit.model_diff(_regridded(before_n), _regridded(after_n))
+    assert any("GRID CHANGED" in l for l in lines)
+    assert any("regridded" in l for l in lines), \
+        "an element-wise worst-case across different grids is meaningless"
 
 
 def test_scalar_and_constant_changes_are_reported():

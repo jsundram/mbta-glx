@@ -126,6 +126,17 @@ def test_window_takes_the_last_n_days_and_reports_what_it_used():
     assert d["window_days"] == 3
 
 
+def test_the_board_decodes_the_absent_sentinel():
+    """-1 only helps if the reader knows what it means.
+
+    `(x/60).toFixed(1)` renders -1 as "-0.0 min", which reads as a real measurement
+    of almost nothing rather than as no data. The panel has to branch on it.
+    """
+    src = _history_source()
+    assert "< 0" in src or "<0" in src, \
+        "history() does not guard the negative sentinel; -1 renders as -0.0 min"
+
+
 def test_a_day_with_no_riders_reports_absent_not_zero():
     """NaN on the board would render as "NaN min", and 0 would read as a free ride."""
     d = stats.build({"2026-09-01": _day("2026-09-01", 4, 4, 0, 0, 0)}, 7)
@@ -155,6 +166,56 @@ def test_scoreboard_round_trips_whole_rows(tmp_path, monkeypatch):
     scores["2026-09-03"] = _day("2026-09-03", 6, 6, 11, 1100, 5500)
     stats.write_scores(scores)
     assert stats.read_scores() == scores
+
+
+def test_the_scoreboard_is_replaced_atomically(tmp_path, monkeypatch):
+    """It is the only copy of a score once data/live is pruned.
+
+    A truncating in-place rewrite loses every day at once if it dies midway, so the
+    write goes beside the file and renames -- and leaves no debris behind.
+    """
+    monkeypatch.setattr(stats, "SCORES", tmp_path / "scores.jsonl")
+    stats.write_scores({"2026-09-01": _day("2026-09-01", 4, 3, 7, 700, 3500)})
+    assert list(stats.read_scores()) == ["2026-09-01"]
+    assert list(tmp_path.iterdir()) == [tmp_path / "scores.jsonl"], \
+        f"left debris: {[p.name for p in tmp_path.iterdir()]}"
+
+    src = inspect_source(stats.write_scores)
+    assert "replace" in src, "write_scores truncates in place"
+
+
+def inspect_source(fn):
+    import inspect
+    return inspect.getsource(fn)
+
+
+def test_the_service_day_comes_from_a_real_zone(tmp_path):
+    """Invariant 8. Archive filenames are ET days; the host's clock may not be ET."""
+    src = (ROOT / "src" / "stats.py").read_text()
+    assert 'time.strftime("%Y-%m-%d")' not in src, \
+        "uses the host's local date to decide which day is still open"
+    assert "service.TZ" in src
+
+
+def test_a_day_with_no_schedule_snapshot_is_not_scored(tmp_path, monkeypatch):
+    """Scoring it would record a permanent undercount.
+
+    replay pins the schedule to the day being scored; with no snapshot for that day
+    there is no timetable tier at all, which took 2026-09-24 from 69/74 to 60/74 when
+    the wrong day was used. A day already in the scoreboard is never rescored, so the
+    wrong number would be final.
+    """
+    import replay
+    monkeypatch.setattr(replay, "SCHED", tmp_path / "empty")
+    with pytest.raises(FileNotFoundError) as e:
+        replay._schedule_slots("2026-09-24")
+    # gzip.open would raise FileNotFoundError on its own, so asserting the type
+    # alone pins nothing. What the explicit check adds is a message that says which
+    # day and why it can never be recovered.
+    msg = str(e.value)
+    assert "2026-09-24" in msg
+    assert "schedule snapshot" in msg
+    assert "8 days" in msg, "the message does not say why the day is unrecoverable"
 
 
 def test_pruned_days_still_count_toward_the_window(tmp_path, monkeypatch):
@@ -203,6 +264,28 @@ def test_by_lead_drops_mispaired_long_leads(tmp_path, monkeypatch):
     assert [b["bin"] for b in out] == ["0-5min"]
     assert out[0]["n"] == 20
     assert out[0]["p50"] == 10
+
+
+def test_the_cap_is_the_last_bin_edge_and_not_a_second_number():
+    """As two independent constants these drifted by one, and nothing could see it.
+
+    A row at exactly the cap passed the filter and fell through every bin -- no wrong
+    output, just a row silently going nowhere. Deriving the cap removes the class of
+    bug, so this pins the derivation rather than the symptom.
+    """
+    assert stats.MAX_LEAD_S is stats.LEAD_BINS[-1][1]
+    src = (ROOT / "src" / "stats.py").read_text()
+    assert "MAX_LEAD_S = LEAD_BINS[-1][1]" in src, "the cap is a second number again"
+
+
+def test_every_row_the_filter_keeps_lands_in_exactly_one_bin(tmp_path, monkeypatch):
+    """Boundary rows, counted against the bins rather than against a restated rule."""
+    leads = [0, 1, 299, 300, 301, 899, 900, 901, 1199]
+    rows = [_row("2026-09-01", lead, 5) for lead in leads]
+    monkeypatch.setattr(stats, "PAIRS", _pairs(tmp_path, rows))
+    out = stats.by_lead(["2026-09-01"])
+    assert sum(b["n"] for b in out) == len(leads)
+    assert [b["bin"] for b in out] == [name for _, _, name in stats.LEAD_BINS]
 
 
 def test_by_lead_is_magoun_inbound_only(tmp_path, monkeypatch):

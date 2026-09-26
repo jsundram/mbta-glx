@@ -50,8 +50,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # One open issue per rating, not one per week: reuse the existing one.
+          # `// empty` matters -- without it jq prints the literal "null" for an
+          # empty list, `[ -n "null" ]` is true, and the first rating change would
+          # run `gh issue comment null` and never create the issue at all.
           existing=$(gh issue list --state open --label rating --json number \
-            --jq '.[0].number')
+            --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body-file rating.txt
             exit 0

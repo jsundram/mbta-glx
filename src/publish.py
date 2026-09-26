@@ -133,6 +133,12 @@ def stage(dest: pathlib.Path) -> list[str]:
 def commit(paths: list[pathlib.Path]) -> bool:
     """Commit the published artifacts locally. Never pushes: that is your call."""
     rel = [str(p.relative_to(ROOT)) for p in paths if p.exists()]
+    if not rel:
+        # An empty pathspec inverts every guard below: `git add` becomes a no-op,
+        # `git diff --cached --` lists the whole index, and `git commit --` commits
+        # it. That is exactly the sweep the scoping is meant to prevent.
+        print("nothing to commit; none of the published artifacts exist")
+        return False
     subprocess.run(["git", "-C", str(ROOT), "add", *rel], check=True)
     # Scope both the message and the commit to our own paths. Reading the whole
     # index would sweep whatever else you had staged into a commit labelled
