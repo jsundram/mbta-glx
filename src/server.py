@@ -42,6 +42,23 @@ def _nearest_scheduled(t: float, slots: list[float]) -> float | None:
     return min(slots, key=lambda s: abs(s - t)) if slots else None
 
 
+# Routes the BROWSER is allowed to reach cross-origin, and nothing else.
+#
+# The static board is the architecture: it computes its own rows from model.json and
+# asks the backend only for what a browser physically cannot fetch -- today that is
+# the SKIPPED/CANCELED markers, which live in a protobuf feed with no CORS. The
+# moment this backend starts serving computed rows to the board, the static property
+# is gone and the board has a server dependency again (architecture.md 3).
+#
+# Cross-origin reachability IS the CORS header, so that is what is policed: a route
+# may only send Access-Control-Allow-Origin if it is listed here, with a reason.
+# tests/test_regressions.py enforces it. Adding a route here should feel deliberate.
+BROWSER_ROUTES = {
+    # M4, not yet implemented: {"t", "skipped_trips", "ttl_s"} and nothing more.
+    "/live-extras.json": "protobuf-only SKIPPED/CANCELED markers; cdn.mbta.com has no CORS",
+}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):  # quiet
         pass

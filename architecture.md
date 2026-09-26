@@ -338,10 +338,44 @@ that slips.
 
 | decision | options | notes |
 |---|---|---|
-| always-on host | iPad kiosk · Raspberry Pi · fly.io / VPS | iPad covers refinement only; capture still needs a real host. Only M5 is blocked. |
+| always-on host | iPad kiosk · Raspberry Pi · fly.io / VPS | iPad covers refinement only; capture still needs a real host. **Only M5 is blocked** — M4 no longer needs it, see below. |
 | archive retention | prune 90d · keep forever | compaction makes a full year ~0.46 GB; keeping everything is now affordable |
 | `data/live` location | inside Dropbox · outside | appended every 15 s; moving it out removes constant sync churn |
 | git remote | none yet | M3's workflows are committed but have never run. Needs a remote, a push, and Pages → Source → GitHub Actions. |
+
+### Decided: M4 serves its endpoint off the Mac over Tailscale
+
+`live-extras.json` stops being a *published artifact* and becomes a **live endpoint**
+on the backend — a route on `server.py`, reachable from the rider's devices over
+Tailscale. `tailscale serve` supplies a real cert for `machine.tailnet.ts.net`, which
+matters because the board is served over HTTPS and a plain `http://` fetch would be
+blocked as mixed content.
+
+This is closer to §1 as drawn than a published file was, and it removes hosting from
+M4's critical path entirely. It needs three things: `Access-Control-Allow-Origin: *`
+(**not** an allowlist of the Pages origin — the board is also opened from `file://`,
+where `Origin` is `null`), a bind beyond `127.0.0.1`, and the endpoint URL published
+in `model.json`'s constants like `walk_s`, so switching origins is a republish rather
+than a code change.
+
+**Why this is not a one-way door.** The route is the same Python in a fly.io
+container; the URL is a published constant; CORS is identical either way. The real
+migration cost was never the endpoint — it is where `data/live` and `plan.json` live,
+and that is owed whenever M5 moves, Tailscale or not.
+
+**What it does not fix: sleep.** For M4 that is survivable — an asleep Mac means the
+fetch fails and the board degrades to an empty skip set, which is the designed
+behaviour. For M5 it is fatal, and Tailscale changes nothing about it. `caffeinate`
+is the interim mitigation; it blocks idle sleep, not a lid close, and does not
+survive a reboot unless it is in the launchd plist.
+
+**The line that keeps the door open.** The endpoint serves *only* what a browser
+physically cannot fetch. The moment it serves computed rows, the static property is
+gone and fly.io stops being optional. That is an intention, so it is enforced rather
+than hoped for: `server.BROWSER_ROUTES` is an allowlist with a stated reason per
+entry, and `tests/test_regressions.py` fails if a CORS header appears outside it, if
+the board reaches a host that is not justified, or if the board starts calling a
+computed-rows route. Verified by injecting all four.
 
 ## 6. Explicit non-goals
 

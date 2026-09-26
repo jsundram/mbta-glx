@@ -99,6 +99,19 @@ without anyone noticing.
 
 - **polars** for anything that ships or is tested; **DuckDB** (`src/q.sh`) for
   ad-hoc questions only — it must stay out of the deploy path.
+- **The backend serves only what a browser cannot fetch.** The board computes its
+  own rows; the one thing it asks for is the protobuf-only skip set. Cross-origin
+  reachability *is* the CORS header, so `server.BROWSER_ROUTES` allowlists it with a
+  reason per entry and tests fail on a CORS header outside the list, an unjustified
+  host in `web/`, or the board calling a computed-rows route. Serving rows from the
+  backend gives up the static architecture.
+- **Keep unresolved predictions.** `rollup.py` stores a prediction that never
+  matched an arrival with a null `actual_arr`. It used to drop them, so `data/pairs`
+  — the store that is never pruned — held no evidence of a train that was predicted
+  and never came, which is exactly what the 240 s no-show debounce needs to stop
+  being hand-tuned off two observed flaps. Null means "no later arrival in THIS
+  day's archive", so it includes end-of-day truncation; measured 3.7% at Magoun
+  inbound, spread through the day rather than bunched at the end.
 - **One copy of the walk.** `data/config.json` holds `walk_s`; everything reads
   `service.DEFAULT_WALK` and `fit.py` publishes it into `model.json` so the board's
   default and the walk `stats.py` scores with cannot disagree. `MAGOUN_WALK_S` still

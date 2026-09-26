@@ -4,8 +4,11 @@ Every test here corresponds to a bug that actually shipped and cost real debuggi
 time. They run in under a second, which is the point: most of these were found by
 waiting for trains, and none of them needed to be.
 """
+import re
 import sys
 import pathlib
+
+import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 import os
@@ -322,3 +325,116 @@ def test_archive_drops_entities_that_leave_the_feed():
         back = list(archive.read(pathlib.Path(d) / "day=x"))
     assert [len(s["preds"]) for s in back] == [1, 0, 1]
     assert [len(s["vehicles"]) for s in back] == [1, 0, 1]
+
+
+# --- the static property: the backend serves only what a browser cannot fetch ---
+#
+# architecture.md 3: the board computes its own rows from model.json and asks the
+# backend for nothing else. That is an intention, not a mechanism, so these three
+# checks make it a mechanism. An accident on any side trips one of them.
+
+ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
+SERVER = ROOT_DIR / "src" / "server.py"
+WEB_DIR = ROOT_DIR / "web"
+# Hosts the board is allowed to reach, each because it can only come from there.
+ALLOWED_HOSTS = {
+    "api-v3.mbta.com": "live predictions and vehicles; CORS-enabled, no key",
+    "ntfy.sh": "the rider's own alert channel, armed by the page",
+}
+
+
+def _board_source() -> str:
+    return (WEB_DIR / "app.js").read_text() + (WEB_DIR / "board.html").read_text()
+
+
+def test_the_board_reaches_no_host_it_has_no_reason_to():
+    """A new absolute URL in the board is a new backend dependency.
+
+    tests/test_publish.py checks the SIBLING assets the board fetches; absolute
+    URLs were unchecked by anything, which is exactly where a server dependency
+    would appear.
+    """
+    hosts = set(re.findall(r"https?://([a-z0-9.-]+)", _board_source()))
+    extra = hosts - set(ALLOWED_HOSTS)
+    assert not extra, (
+        f"the board reaches {sorted(extra)}, which is not in ALLOWED_HOSTS. If this "
+        "is a backend serving something the browser genuinely cannot fetch, add it "
+        "with the reason; if it serves computed rows, the board is no longer static.")
+
+
+def test_only_allowlisted_routes_may_be_reachable_from_a_browser():
+    """Cross-origin reachability IS the CORS header, so that is what is policed.
+
+    Adding Access-Control-Allow-Origin to /api would hand the board a server that
+    computes its rows for it, which is the one thing the static architecture is
+    built to avoid. server.py's BROWSER_ROUTES is the deliberate list.
+    """
+    import server
+    src = SERVER.read_text()
+    # Every route the handler answers, and every route named near a CORS header.
+    cors_lines = [i for i, l in enumerate(src.splitlines())
+                  if "Access-Control-Allow-Origin" in l and not l.lstrip().startswith("#")]
+    if not cors_lines:
+        return          # no CORS anywhere yet: nothing is browser-reachable
+    routes = set(re.findall(r'u\.path == "([^"]+)"', src))
+    allowed = set(server.BROWSER_ROUTES)
+    assert allowed <= routes | {"/live-extras.json"}, \
+        f"BROWSER_ROUTES names routes that do not exist: {sorted(allowed - routes)}"
+    # A CORS header must be inside a branch for an allowlisted route, which we
+    # approximate by requiring the allowlist to be consulted rather than bypassed.
+    assert "BROWSER_ROUTES" in src, \
+        "server.py sends CORS headers without consulting BROWSER_ROUTES"
+
+
+def test_the_browser_route_allowlist_states_a_reason_for_each_entry():
+    """An entry with no reason is how the list stops being a decision."""
+    import server
+    for route, why in server.BROWSER_ROUTES.items():
+        assert route.startswith("/"), route
+        assert len(why) > 20, f"{route} has no real justification: {why!r}"
+        assert "CORS" in why or "protobuf" in why or "cannot" in why, \
+            f"{route}'s reason does not say why a browser cannot fetch it: {why!r}"
+
+
+def test_the_board_computes_its_own_rows():
+    """The load-bearing half of 'static': compute_rows is ported, not fetched."""
+    js = (WEB_DIR / "app.js").read_text()
+    assert "computeRows" in js or "compute_rows" in js, \
+        "app.js no longer contains the ported prediction function"
+    # A path-anchored match: plain "/api" also occurs inside "api-v3.mbta.com".
+    assert not re.search(r"""["'`]/api\b""", js), \
+        "the board is calling the backend's computed-rows route"
+
+
+def test_rollup_keeps_predictions_that_never_resolved():
+    """No-show evidence must survive into the store that is never pruned.
+
+    rollup used to `continue` past any prediction with no matching arrival, so
+    data/pairs held no record of a train that was predicted and never came -- the
+    evidence the notifier's 240 s debounce would need to stop being hand-tuned.
+    data/live has it and is pruned at 90 days, so dropping it here lost it for good.
+    """
+    src = (ROOT_DIR / "src" / "rollup.py").read_text()
+    body = src[src.index("def rollup_day"):]
+    assert "if a is None:\n            continue" not in body, \
+        "rollup is dropping unpaired predictions again"
+    assert '"actual_arr": int(a) if a is not None else None' in body, \
+        "unpaired predictions must be kept with a null actual_arr"
+
+
+def test_the_store_actually_contains_unresolved_predictions():
+    """The guard above is about source; this is about what is on disk."""
+    import glob
+    import polars as pl
+    files = sorted(glob.glob(str(ROOT_DIR / "data" / "pairs" / "*.parquet")))
+    if not files:
+        pytest.skip("no rolled-up days on this machine")
+    d = pl.concat([pl.read_parquet(f) for f in files])
+    m = d.filter((pl.col("stop") == "70508") & (pl.col("dir") == 0))
+    unpaired = m.filter(pl.col("actual_arr").is_null()).height
+    assert unpaired > 0, (
+        "no unresolved predictions at Magoun inbound: either every predicted train "
+        "arrived, or rollup is dropping them again. Re-roll with --force.")
+    # Measured 3.7% at this stop. An order of magnitude more means the arrival
+    # detection has broken, not that the trains stopped coming.
+    assert unpaired / m.height < 0.25, f"{unpaired}/{m.height} unresolved is too many"

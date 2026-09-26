@@ -232,12 +232,23 @@ def rollup_day(path: pathlib.Path) -> pl.DataFrame:
         # Pair each prediction with the next arrival of that vehicle at that stop.
         times = actual.get((veh, stop))
         a = next((x for x in times if x > made), None) if times else None
-        if a is None:
-            continue
+        # An unpaired prediction is KEPT, with a null actual_arr. This used to
+        # `continue`, which meant the never-pruned store held no record of a train
+        # that was predicted and then never came -- exactly the evidence needed to
+        # fit the notifier's no-show debounce, which is currently a hand-tuned 240 s
+        # off two observed flaps. data/live has it but is pruned at 90 days, so
+        # dropping it here discarded it permanently.
+        #
+        # Null actual_arr means "no later arrival of this vehicle at this stop in
+        # THIS day's archive". That includes end-of-day truncation, not just
+        # no-shows, so an analysis must ignore predictions made near the archive's
+        # end rather than trusting every null.
         rows.append({
             "day": day, "stop": stop, "dir": d, "route": route, "veh": veh,
             "trip": trip, "made_at": int(made), "pred_arr": int(pred),
-            "actual_arr": int(a), "lead_s": int(a - made), "err_s": int(pred - a),
+            "actual_arr": int(a) if a is not None else None,
+            "lead_s": int(a - made) if a is not None else None,
+            "err_s": int(pred - a) if a is not None else None,
             "unc_s": int(unc) if unc is not None else -1,
         })
     return pl.DataFrame(rows, schema=SCHEMA) if rows else pl.DataFrame(schema=SCHEMA)
