@@ -201,9 +201,14 @@ without anyone noticing.
   A 429 is swallowed by `watch.main` as a bad tick, and in the board it aborts
   `tick()` at `snapshot()` — *before* the skip and capture fetches, so those look
   unanswered when the real fault is upstream.
-  Two keys, because they cannot share one: the backend reads `MBTA_API_KEY` from
-  `ops/secrets.env` (`service.KEY` sends it as `x-api-key`), and the board keeps
-  its own in `localStorage["magoun.mbtakey"]`, sent as an `api_key` query param —
+  Two *places*, not necessarily two keys — MBTA approves key requests rather than
+  handing them out, so one key in both is normal and fine (the limit is per key
+  and usage is nowhere near it). The board is the heavy user at ~12.5/min per open
+  tab; `watch.py` only fetches while a plan is armed and the archiver reads
+  `cdn.mbta.com`, so with a single key the *board* is where it buys the most.
+  The backend reads `MBTA_API_KEY` from `ops/secrets.env` (`service.KEY` sends it
+  as `x-api-key`); the board keeps one in `localStorage["magoun.mbtakey"]`, sent
+  as an `api_key` query param —
   a custom header would force a CORS preflight and double the request count.
   **Never publish a key into `model.json`**: that file is served from a public
   origin. `tests/test_server.py` fails on a committed key.
