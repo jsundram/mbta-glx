@@ -325,12 +325,50 @@ have never run. Add the remote, push, and set Pages → Build and deployment →
 
 **Done when:** a skipped train is struck through on the static board.
 
-### M5 — Backend notifier
-- `watch.py` refines an armed alert after the page closes; brief and recovery.
-- Needs the always-on host decision (below).
+### M5 — Backend notifier — **done**
+
+Mostly not new logic: `watch.py` already had the tick, the debounce, the revision
+rule and the command thread. What it did not have was a connection to the thing
+that arms an alert, a test that ran the tick at all, and agreement between what the
+plan documents said and what the code did.
+
+**The handoff.** The bell on the static board schedules an ntfy push with `At` and
+re-points it every minute while the page is open. It now also posts
+`arm <eta> [vehicle]` to the command topic `watch.py` already subscribes to — the
+notification-button reply path, in the other direction. No endpoint, no widened
+CORS, nothing for the backend to serve. `arm` is idempotent, because an open page
+sends it every minute and a fresh plan each time would forget that leave-now had
+fired. A plan armed this way has no destination and no deadline — the bell knows a
+train, not an errand — so it gets leave-now, revisions and recovery, and no
+probability of arriving anywhere by any time.
+
+**Three things were wrong, and only running them showed it:**
+
+| | was | is |
+|---|---|---|
+| a train that slips | `UnboundLocalError` on every revision tick, swallowed as a bad tick — taking the leave-now below it too | announced, and still tracked |
+| the 240 s debounce | `_recover`, which drops the commitment | `_uncertain`, which adopts and says so — the behaviour launch-plan.md already specified and nothing called |
+| a tap mid-tick | overwritten by the tick's own save | the handler holds the lock |
+
+**And ntfy does not do what the board assumed.** Measured against ntfy.sh: three
+publishes with one `Sequence-ID` and one `At` deliver three times, and
+`/{topic}/{seq}/delete` publishes a `message_delete` event while the scheduled send
+still arrives. Both are the ntfy *app* collapsing or dismissing a notification, not
+the server rescheduling — indistinguishable from "delivers exactly once" when you
+are watching a phone. So a re-arm is a real max-priority delivery, and a board left
+open past its leave time queued one a minute until the train arrived. The board now
+re-arms only when the leave time actually moved, never once it has passed, and
+hands the refining to the notifier instead.
+
+`tests/test_watch.py` drives real ticks through the real plan file with three seams
+stubbed — where a snapshot comes from, what `etas` makes of it, where a push goes.
+Each fix was reverted separately and fails its own test and no other.
 
 **Done when:** an alert armed at 08:00 and then abandoned still tracks a train
-that slips.
+that slips. Done —
+`test_an_armed_alert_tracks_a_slip_with_no_page_open` arms by the path the bell
+uses, drops the page, and follows the train through a five-minute slip.
+Not yet demonstrated against a live train and the real topics.
 
 ---
 
@@ -338,10 +376,38 @@ that slips.
 
 | decision | options | notes |
 |---|---|---|
-| always-on host | iPad kiosk · Raspberry Pi · fly.io / VPS | iPad covers refinement only; capture still needs a real host. **Only M5 is blocked** — M4 no longer needs it, see below. |
+| always-on host | iPad kiosk · Raspberry Pi · fly.io / VPS | **Deferred, not closed** — M5 ships on this Mac, see below. |
 | archive retention | prune 90d · keep forever | compaction makes a full year ~0.46 GB; keeping everything is now affordable |
 | `data/live` location | inside Dropbox · outside | appended every 15 s; moving it out removes constant sync churn |
 | git remote | none yet | M3's workflows are committed but have never run. Needs a remote, a push, and Pages → Source → GitHub Actions. |
+
+### Deferred: M5 ships on this Mac, and the gap is made visible instead
+
+The notifier has to fire at a wall-clock instant. This Mac sleeps, launchd runs the
+missed tick on wake, and no amount of care inside `watch.py` changes that. The
+decision is to ship M5 here anyway and keep the host question open, because the
+alternative is holding a finished milestone hostage to a deployment.
+
+What that buys and costs, stated rather than hoped:
+
+- `caffeinate -i -s` now wraps the job inside `src/watch.sh`, so it comes back with
+  the launchd agent after a reboot instead of lasting until somebody forgets to
+  re-run it. It blocks idle sleep. **It does not survive a lid close.**
+- A tick that runs late no longer fires a leave-now regardless. The test is the
+  walk itself, so there is no constant to tune: if `eta - now` still leaves room to
+  get there, go; otherwise say the train cannot be made and offer the next one.
+  Before this, a board-armed plan would send the rider out for a train up to 30
+  minutes gone.
+- So the failure mode is a **missed nudge, not a wrong one** — and it is now the
+  only thing the host question still buys.
+
+**What moving would cost, when it is worth paying.** `watch.py` needs the MBTA API,
+`model.json`, and a few KB of state — under 100 KB, and Phase 5 held that line from
+the first line of code. The one exception is `brief.health`, which reads
+`data/live/rt-*.jsonl.gz` to say whether service is normal today; off this host that
+degrades to `"unknown"` unless the notifier keeps its own rolling arrival window,
+which `count_arrivals` already knows how to build. fly.io runs the rest unchanged;
+Lambda would mean giving up the tick loop and the ntfy subscription thread.
 
 ### Decided: M4 serves its endpoint off the Mac over Tailscale
 
@@ -390,6 +456,10 @@ own horizon — we relay it. A general transit app.
 
 ## 7. Sequencing note
 
-M1–M3 are done; M4 is unblocked. Phase 1 calibration is gated on the works ending **2026-10-05**
+M1–M3 and M5 are done; **M4 is still open** and is now the only unbuilt milestone —
+`/live-extras.json` is allowlisted in `server.BROWSER_ROUTES` and named in
+`test_the_allowlist_only_names_routes_that_exist_or_are_planned` as planned, but
+there is no route, no `skips.py` and no `extras_url` constant. M5 did not need it.
+Phase 1 calibration is gated on the works ending **2026-10-05**
 and a rating change on **2026-12-12** resets every schedule-dependent constant, so
 prefer shipping the structure now and re-fitting into it later.

@@ -463,11 +463,19 @@ headway is indistinguishable from a no-show, and following the wrong train loudl
 beats abandoning the right one silently.
 
 ### Triggers
-- [ ] **Leave now** — fires once, at the q10 departure time for the chosen train.
-- [ ] **Start jogging / ease up** — mid-walk, ~3 min in, when the train clears
-      Medford/Tufts (±33 s) or Ball Sq (±7 s). Countdown, not prose.
-- [ ] **Recovery** — the chosen train no-shows (~9.6% of the time). *"That one
-      vanished. Next is 8:29, still 70% for your 9:00."* This is a core feature.
+- [x] **Leave now** — fires once, at the q10 departure time for the chosen train.
+      Bounded at the late end by the walk itself: a tick that runs after the train
+      is closer than a walk away says so instead, because the host sleeps and a
+      leave-now for an unreachable train is worse than the silence it replaces.
+- [x] **Start jogging / ease up** — mid-walk, when the train clears
+      Medford/Tufts (±33 s) or Ball Sq (±7 s). Countdown, not prose. Fires once,
+      only from those two tiers, and only after *On my way* — without that tap
+      there is no reference point and the slack would be invented.
+- [x] **Recovery** — the chosen train no-shows (~9.6% of the time). Split by what
+      the feed actually said: a stated skip recovers at once; 240 s of silence
+      adopts the best candidate and announces it, because silence is not a
+      statement; only when there is nothing left to follow is the commitment
+      dropped.
 - [ ] **Suppression** — no notification while the do-not-leave floor holds
       (nothing berthed ⇒ ≥ 240 s clear at 99.5%).
 
@@ -477,6 +485,13 @@ ntfy's `http` action button posts back to a second topic, so the **On my way** b
 on the leave-now push tells the service directly. No inbound port, no tunnel, no
 static IP, and the notifier stays host-portable. If it is never tapped, the adjust
 push simply does not fire — a missed nudge rather than a wrong one.
+
+That same topic is how the **board's bell** hands an armed alert to the notifier:
+`arm <eta> [vehicle]`, an epoch so neither side parses a clock. It carries the
+vehicle id because that is the only thing separating a prediction flap from a
+no-show — the timing of the two is identical — so an arm without one costs the
+notifier its recovery. The board was dropping `vehicle` from `next`; it no longer
+does.
 
 **Known limitations, all found by testing:**
 
@@ -489,6 +504,11 @@ push simply does not fire — a missed nudge rather than a wrong one.
   failing. This is the strongest argument for Pushover (5c) on another device.
 - Subscribe on the phone to the outbound topic **only**. Subscribing to the command
   topic echoes your own taps back and looks like the notifier spamming you.
+- **A scheduled message cannot be rescheduled or cancelled.** `Sequence-ID` and
+  `delete` are app-side collapsing and dismissal; the server delivers every publish
+  and still sends a "deleted" one. So refinement cannot live in ntfy's queue, which
+  is what the board assumed — it has to be a process that is still running. That is
+  the argument for the notifier owning an armed alert rather than the page.
 
 ### Superseded — how does it know you left?
 
@@ -731,7 +751,11 @@ but it is the fallback if the JS port starts growing.
       weekly and mean nothing. `feed_end_date` is where **2026-12-12** actually comes
       from. A weekly workflow opens one issue when it moves; the refit itself needs
       `data/raw` and runs on the host.
-- [ ] Pick the always-on host (Pi vs fly.io) — still the open Phase 5 decision
+- [ ] Pick the always-on host (Pi vs fly.io). **Deferred, not blocking**: M5 ships
+      on this Mac with `caffeinate` in the launchd job and a late tick that checks
+      whether the walk still fits before sending anyone out. A lid close still
+      stops it. See architecture.md section 5 for what moving would cost — the one
+      real tie to this host is `brief.health` reading `data/live`.
 - [ ] Add a git remote. M3's three workflows are committed but have never run; Pages
       also needs Source → GitHub Actions set once.
 - [ ] **A v3 sidecar for `revenue`.** Live serving already merges both feeds — v3
@@ -766,7 +790,8 @@ history can stay on the Mac (or stop entirely) without the notifier caring.
 - [x] Config via env (`MAGOUN_ROOT`, `MAGOUN_WALK_S`) — no absolute paths in code.
 - [x] Real timezone (`ZoneInfo("America/New_York")`). **Was hardcoded to EDT**, which
       would have silently broken every schedule lookup on 2026-11-01.
-- [ ] `--once` tick mode so a cloud cron can drive it without a long-running process.
+- [x] `--once` tick mode so a cloud cron can drive it without a long-running
+      process (`src/watch.py once`).
 - [ ] No `launchd` assumptions inside application code; scheduling stays in `ops/`.
 
 Migration then = copy the bundle, set env vars, deploy. Hosts, when that day comes:
@@ -785,8 +810,10 @@ granularity). GitHub Actions cron is out — 5-min granularity and routinely 5�
 **ntfy's `http` action button solves the open question above for free.** A notification
 can carry a "Leaving now" button that POSTs straight back to the service — that single
 tap both commits the train and arms the countdown, with zero app development. ntfy also
-supports up to 3 buttons, priority 1–5, and scheduled/updatable messages via
-`sequence_id`. Pushover's edge is emergency priority, which pierces quiet hours — likely
+supports up to 3 buttons, priority 1–5, and scheduled messages via `At`. **Not
+updatable ones** — `sequence_id` and `delete` tell the *app* to collapse or dismiss
+a notification; measured against ntfy.sh, the server delivers every publish and
+still sends a "deleted" scheduled message. See the gotchas in CLAUDE.md. Pushover's edge is emergency priority, which pierces quiet hours — likely
 worth $5 once a silenced 08:04 alert costs a real missed train.
 
 **(b) PWA — yes, and probably the end state.** iOS has supported Web Push for

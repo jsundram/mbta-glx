@@ -135,6 +135,15 @@ without anyone noticing.
   `5: Input/output error` and leaves the agent stopped.
 - ntfy rejects `?since=now` with **HTTP 400**; subscribe with no `since`. Its
   reconnect loop must log, or a dead channel looks exactly like silence.
+- **`Sequence-ID` does not replace a pending scheduled message, and `delete` does
+  not cancel one.** Measured: three publishes with one `Sequence-ID` and one `At`
+  deliver three times; `GET /{topic}/{seq}/delete` publishes a `message_delete`
+  *event* and the scheduled send still arrives. Both are instructions to the ntfy
+  **app** to collapse or dismiss a notification in the tray, not server-side
+  scheduling — which is why from a phone it looks exactly like "reschedule delivers
+  exactly once", and was written down that way. So every re-arm is a real delivery:
+  `web/board.html` re-arms only when the leave time moved, and refinement after the
+  page closes belongs to `watch.py`, which is what the `arm` handoff is for.
 - MBTA predictions **flap ~8 min for ~90 s**. Debounce longer than the flap, and
   never widen a re-match far enough to reach the next train (headway 528 s).
 - `cdn.mbta.com/*.pb` has **no CORS** and is the only source of `SKIPPED`

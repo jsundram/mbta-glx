@@ -64,15 +64,21 @@ hatched, and trains waiting to turn around sit in the terminus pill. Because tod
 inbound train is yesterday's outbound train, the right rail is a preview of the left.
 
 The **notify me** button on the next train arms a push with no backend involved:
-ntfy holds the message until the computed leave time, the page re-arms it once a
-minute while open so a moving ETA stays current, and it still fires after you
-close the tab. First use asks for the topic and remembers it.
+ntfy holds the message until the computed leave time, and it still fires after you
+close the tab. First use asks for the topic and remembers it, and offers to
+remember the command topic too — with that, the button also hands the train to the
+notifier, which is what keeps the alert current once the page is gone.
 
-Left open on a tablet it becomes a dashboard that keeps refining: it re-arms the
-alert every minute, holds the screen awake via `navigator.wakeLock` where
-supported, survives a browser-initiated reload, and re-arms immediately when the
-screen wakes. If the tablet dies the alert still fires — ntfy holds it — it just
-stops being updated.
+That handoff matters because a scheduled ntfy message cannot be rescheduled. The
+page re-points its own alert only when the leave time has actually moved, and never
+once it has passed, because every publish is a real delivery: `Sequence-ID` and
+`delete` collapse and dismiss notifications in the app, they do not reschedule
+anything on the server.
+
+Left open on a tablet it holds the screen awake via `navigator.wakeLock` where
+supported, survives a browser-initiated reload, and refreshes immediately when the
+screen wakes. If the tablet dies the alert still fires — ntfy holds it — and if the
+notifier is running it is still being refined.
 
 Below the map it scores itself: the **last 10 trains**, each showing when "leave
 now" would have fired and whether you would have caught it
@@ -127,7 +133,15 @@ If the committed train never runs — 9.6% of them don't — a **recovery** push
 the next one. Four notifications normally, six in the worst case.
 
 Button taps travel back over a second ntfy topic, so the notifier needs no inbound
-port, tunnel or static IP, and moves to a cloud host unchanged.
+port, tunnel or static IP, and moves to a cloud host unchanged. The board's bell
+uses the same topic to hand over an armed alert (`arm <eta> [vehicle]`), so an
+alert armed at 08:00 on a page you then close is still tracked through a slip, a
+no-show and a recovery.
+
+It runs on this Mac for now, under `caffeinate` inside the launchd job. A lid close
+still stops it; a tick that comes back late checks whether the walk still fits
+before telling you to leave, so the failure is a missed nudge rather than a wrong
+one.
 
 ## What the history says
 
