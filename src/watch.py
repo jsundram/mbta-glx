@@ -3,7 +3,9 @@
 Notification budget (launch-plan.md, decision 1): 4 normal, 6 worst case.
   brief            -- the options, with buttons to pick one
   leave now        -- for the committed train, max priority
-  adjust           -- once the train is moving and its ETA is sharp (+/-33 s or better)
+  adjust           -- once the train is moving and its ETA is sharp (see
+                      ADJUST_SOURCES; measured, those two tiers are +3/+29 s and
+                      +1/+56 s at their leads, against -35/+261 s at ten minutes)
   recovery         -- only if the committed train stops being predicted
 
 Commands arrive on the ntfy command topic -- from action buttons on the phone, and

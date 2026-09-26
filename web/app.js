@@ -215,6 +215,11 @@ function computeRows(now, preds, vehicles, model, walk, qs, horizon, berths,
  * the train berthed -- that has to be observed across polls. Without this the
  * berth tier never fires at all. `seen` is handed in and out so the caller can
  * persist it: a tablet dashboard gets reloaded under memory pressure.
+ *
+ * It does NOT require current_status === "STOPPED_AT", and that is measured rather
+ * than sloppy -- see service.BerthTracker. All 210 inbound terminus visits over
+ * 2026-09-24..25 were already STOPPED_AT the first time the feed placed them
+ * there, so the check that looks missing would change nothing.
  */
 class BerthTracker {
   constructor(seen) { this.seen = seen || {}; }

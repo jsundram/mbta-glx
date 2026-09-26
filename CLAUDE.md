@@ -71,9 +71,14 @@ through the proxy; `/api`, `/status`, `/board` and `/history` answer **404** the
 
 Secrets live in `ops/secrets.env` (gitignored; `ops/ntfy.env` is the older name and
 is still read). `ops/secrets.env.example` documents all three values. The board
-cannot read that file — its MBTA key is per device in
-`localStorage["magoun.mbtakey"]`, or pasted into the box the board shows when it is
-being rate-limited.
+cannot read that file, and nothing per-device is in the page, the repo or
+`model.json` — it is served from a public origin. Four keys in `localStorage`, all
+of them set from the **settings panel** under the footer: `magoun.walk` (seconds),
+`magoun.ntfy`, `magoun.cmd`, `magoun.mbtakey`. The panel is a link, not a dialog on
+load: the board reads fine with none of it set. The bell opens it when there is
+nowhere to send an alert, and once — the `magoun.cmd.asked` flag — to offer the
+command topic to an install that predates the handoff. The MBTA key also has its own
+box, shown only while v3 is actually refusing this address.
 
 The board is served at **https://jsundram.github.io/mbta-glx/** by `pages.yml`.
 

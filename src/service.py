@@ -209,6 +209,16 @@ class BerthTracker:
     The vehicle feed refreshes a stopped train's timestamp, so it does not tell us
     when the train berthed -- that has to be observed. State is persisted so a
     server restart does not lose trains already sitting there.
+
+    It does NOT require `current_status == "STOPPED_AT"`, and that is measured
+    rather than sloppy. The obvious worry is that a train still rolling into the
+    terminus starts the berth clock early, which would make every berth-tier ETA
+    optimistic AND disagree with the fitted offsets (build_dataset measures the
+    berth from the STOPPED_AT transition, per invariant 2). Over 2026-09-24..25 all
+    210 inbound terminus visits were already STOPPED_AT the first time the feed put
+    them there, with a zero-second gap at every percentile. So the check would
+    change nothing, and adding it would be an unmeasured change to the contract
+    that looks like a fix.
     """
 
     def __init__(self, path: pathlib.Path = BERTH_STATE):

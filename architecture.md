@@ -417,8 +417,9 @@ rule and the command thread. What it did not have was a connection to the thing
 that arms an alert, a test that ran the tick at all, and agreement between what the
 plan documents said and what the code did.
 
-**The handoff.** The bell on the static board schedules an ntfy push with `At` and
-re-points it every minute while the page is open. It now also posts
+**The handoff.** The bell on the static board schedules ONE ntfy push with `At` and
+cannot re-point it — a second publish adds a delivery and the first cannot be
+withdrawn, measured, which is why refinement belongs to the notifier. It also posts
 `arm <eta> [vehicle]` to the command topic `watch.py` already subscribes to — the
 notification-button reply path, in the other direction. No endpoint, no widened
 CORS, nothing for the backend to serve. `arm` is idempotent, because an open page
@@ -426,6 +427,17 @@ sends it every minute and a fresh plan each time would forget that leave-now had
 fired. A plan armed this way has no destination and no deadline — the bell knows a
 train, not an errand — so it gets leave-now, revisions and recovery, and no
 probability of arriving anywhere by any time.
+
+**Settings live in the browser, not the bundle.** The topic is one person's phone,
+the key is one person's quota and the walk is one person's front door, and the board
+is served from a public origin — so `magoun.walk`, `magoun.ntfy`, `magoun.cmd` and
+`magoun.mbtakey` are `localStorage`, set from a panel behind a link under the
+footer. A link rather than a dialog on load, because the board needs none of it to
+be read: predictions, map and list all work unconfigured. The bell opens the panel
+when there is nowhere to send an alert, and once to offer the command topic to an
+install that predates the handoff. Before this it was two native `prompt()` calls
+and a reload, asking a first-time visitor for "the ntfy topic (from
+`ops/ntfy.env`)".
 
 **Three things were wrong, and only running them showed it:**
 

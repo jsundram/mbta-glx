@@ -347,11 +347,78 @@ def capture_scenario(browser, check) -> None:
     check("a long silence reads in hours", "6h" in long, long[-90:])
 
 
+def _settings_page(browser, live, seed: str):
+    """A board with `seed` in localStorage and every ntfy post captured."""
+    page = browser.new_page()
+    page.add_init_script(seed)
+    stub(page, live)
+    posts = []
+    page.route(re.compile(r"ntfy\.sh"), lambda r: (
+        posts.append(r.request.url), r.fulfill(status=200, json={"id": "stub"})))
+    # Nothing here may be a native dialog any more: the panel replaced both prompts,
+    # and a prompt() left behind would block the page in a way this would not see.
+    dialogs = []
+    page.on("dialog", lambda d: (dialogs.append(d.message), d.dismiss()))
+    page.goto(BOARD)
+    page.wait_for_timeout(5000)
+    return page, posts, dialogs
+
+
+def firstrun_scenario(browser, check) -> None:
+    """A board nobody has configured -- which is everyone but its author.
+
+    The topic is one person's phone and the walk is one person's front door, so a
+    stranger inherits both silently and gets a native prompt asking for an "ntfy
+    topic (from ops/ntfy.env)" the first time they tap the bell. The board itself
+    needs no configuration at all, so the panel must NOT be in the way on load, and
+    must be what the bell opens when there is nowhere to send an alert.
+    """
+    fixture = sorted((ROOT / "tests" / "fixtures").glob("cases-*.json"))[0]
+    case = json.loads(fixture.read_text())[0]
+    live = shifted(case, time.time() - case["now"] + 30)
+    page, posts, dialogs = _settings_page(browser, live, """
+      localStorage.clear();
+    """)
+    print("\n  a board nobody has configured yet")
+    check("nothing blocks a first load", not dialogs and page.is_hidden("#panel"))
+    check("and the board still works with no settings at all",
+          page.eval_on_selector_all(".row", "e => e.length") >= 1)
+    page.click("#bell")
+    page.wait_for_timeout(500)
+    check("the bell opens the settings rather than a native prompt",
+          not page.is_hidden("#panel") and not dialogs,
+          f"{len(dialogs)} dialog(s)")
+    check("and says what is missing",
+          "ntfy topic" in page.inner_text("#setneed"), page.inner_text("#setneed"))
+    check("nothing was published on the way", not posts, f"{len(posts)} posts")
+    # The walk is prefilled from the published default, in minutes, so a stranger
+    # can see whose walk they have been handed.
+    check("the walk is shown, in minutes, from model.json",
+          page.input_value("#setwalk") == f"{WALK_S / 60:.1f}".rstrip("0").rstrip("."),
+          page.input_value("#setwalk"))
+    page.fill("#setwalk", "9")
+    page.fill("#setntfy", "smoke-firstrun")
+    page.click("#setform button[type=submit]")
+    page.wait_for_timeout(500)
+    check("saving stores the walk in seconds",
+          page.evaluate("localStorage.getItem('magoun.walk')") == "540",
+          str(page.evaluate("localStorage.getItem('magoun.walk')")))
+    check("and it took effect without a reload",
+          page.evaluate("Magoun.walkSeconds()") == 540)
+    page.click("#setclose")
+    page.click("#bell")
+    page.wait_for_timeout(1500)
+    sched = [u for u in posts if "smoke-firstrun" in u]
+    check("the bell then arms, to the topic just entered", len(sched) >= 1,
+          f"{len(posts)} posts")
+    page.close()
+
+
 def upgrade_scenario(browser, check) -> None:
     """A board that was set up before the handoff existed.
 
-    Everyone who has ever used the bell already has `magoun.ntfy` in localStorage,
-    so the first-run prompt never runs again for them. Asking for the command topic
+    Everyone who has ever used the bell already has `magoun.ntfy` set, so a question
+    asked only on first run never runs again for them. Asking for the command topic
     only there meant the handoff silently never happened for the entire population
     the feature is for -- and the main scenario below cannot see it, because it
     seeds `magoun.cmd` itself.
@@ -359,43 +426,39 @@ def upgrade_scenario(browser, check) -> None:
     fixture = sorted((ROOT / "tests" / "fixtures").glob("cases-*.json"))[0]
     case = json.loads(fixture.read_text())[0]
     live = shifted(case, time.time() - case["now"] + 30)
-    page = browser.new_page()
-    # Guarded: add_init_script runs on EVERY navigation, and answering the prompt
-    # reloads the page. Unguarded, it wipes the topic the page just stored.
-    page.add_init_script(f"""
-      if (!localStorage.getItem("magoun.smoke.seeded")) {{
-        localStorage.setItem("magoun.smoke.seeded", "1");
-        localStorage.setItem("magoun.ntfy", "smoke-test-topic");
-        localStorage.setItem("magoun.walk", "{WALK_S}");
-        localStorage.removeItem("magoun.cmd");
-        localStorage.removeItem("magoun.cmd.declined");
-        localStorage.removeItem("magoun.armed");
-        localStorage.removeItem("magoun.berths");
-      }}
+    page, posts, dialogs = _settings_page(browser, live, f"""
+      localStorage.clear();
+      localStorage.setItem("magoun.ntfy", "smoke-test-topic");
+      localStorage.setItem("magoun.walk", "{WALK_S}");
     """)
-    stub(page, live)
-    posts = []
-    page.route(re.compile(r"ntfy\.sh"), lambda r: (
-        posts.append(r.request.url), r.fulfill(status=200, json={"id": "stub"})))
-    asked = []
-    page.on("dialog", lambda d: (asked.append(d.message),
-                                 d.accept("smoke-upgrade-cmd")))
-    page.goto(BOARD)
-    page.wait_for_timeout(5000)
     print("\n  a board set up before the handoff existed")
-    page.click("#bell")                      # prompts, stores, then reloads
-    page.wait_for_timeout(6000)
+    page.click("#bell")
+    page.wait_for_timeout(500)
     check("it asks an existing install for the command topic",
-          any("COMMAND topic" in m for m in asked), f"{len(asked)} dialog(s)")
+          not page.is_hidden("#panel")
+          and "command topic" in page.inner_text("#setneed").lower(),
+          page.inner_text("#setneed")[:60])
+    check("and did not arm on the way", not posts, f"{len(posts)} posts")
+    page.fill("#setcmd", "smoke-upgrade-cmd")
+    page.click("#setform button[type=submit]")
+    page.wait_for_timeout(500)
     check("and remembers it",
           page.evaluate("localStorage.getItem('magoun.cmd')") == "smoke-upgrade-cmd",
           str(page.evaluate("localStorage.getItem('magoun.cmd')")))
+    page.click("#setclose")
     posts.clear()
     page.click("#bell")                      # now it arms, and hands off
     page.wait_for_timeout(3000)
     check("so the handoff then reaches the command topic",
           any("smoke-upgrade-cmd" in u for u in posts),
           f"{len(posts)} ntfy posts")
+    # Answered once, whatever the answer: a board that asks every time is a board
+    # whose owner stops reading what it asks.
+    page.click("#bell")                      # cancels
+    page.wait_for_timeout(300)
+    page.click("#bell")                      # arms again, and must not ask
+    page.wait_for_timeout(300)
+    check("and never asks again", page.is_hidden("#panel"))
     page.close()
 
 
@@ -638,6 +701,7 @@ def run(case_index: int, headed: bool) -> int:
         check("the self-score panel hides itself from file://",
               page.is_hidden("#hist"))
         dwell_scenario(browser, check)
+        firstrun_scenario(browser, check)
         upgrade_scenario(browser, check)
         skip_scenario(browser, check)
         capture_scenario(browser, check)

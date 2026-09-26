@@ -148,6 +148,34 @@
                 background:var(--card);color:var(--ink)}
   .keyask button{font:inherit;padding:6px 12px;border-radius:6px;cursor:pointer;
                  border:1px solid var(--go);background:var(--go);color:var(--card)}
+  /* Settings. Nothing here is needed to READ the board -- it works with no
+     configuration at all -- so it is a link under the footer rather than a dialog
+     in front of a first-time visitor. The bell opens it when there is nowhere to
+     send an alert, which is the moment it is worth anyone's attention. Outside
+     .foot for the same reason .keyask is: paint() rebuilds that innerHTML every
+     250 ms and an input inside it could never be typed into. */
+  .setlink{background:none;border:0;padding:0;margin-top:10px;font:inherit;
+           font-size:12px;color:var(--dim);cursor:pointer;
+           text-decoration:underline;text-decoration-style:dotted}
+  .setlink:hover{color:var(--go)}
+  .setlink:focus-visible{outline:2px solid var(--go);outline-offset:2px}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:10px;
+         padding:14px 16px 16px;margin-top:10px;font-size:13px;line-height:1.5}
+  .panel h2{font-size:11px;letter-spacing:.09em;text-transform:uppercase;
+            color:var(--dim);margin:0 0 12px;font-weight:600}
+  .panel label{display:block;margin-bottom:13px}
+  .panel b{display:block;font-size:13px;font-weight:600;margin-bottom:1px}
+  .panel .why{display:block;color:var(--dim);font-size:12px;margin-bottom:5px}
+  .panel input{width:100%;font:inherit;font-family:var(--mono);font-size:13px;
+               padding:7px 9px;border:1px solid var(--line);border-radius:6px;
+               background:var(--bg);color:var(--ink)}
+  .panel .act{display:flex;gap:9px;align-items:center}
+  .panel button{font:inherit;font-size:13px;padding:7px 15px;border-radius:6px;
+                cursor:pointer;border:1px solid var(--go);background:var(--go);
+                color:var(--card)}
+  .panel button.alt{background:none;color:var(--dim);border-color:var(--line)}
+  .panel .said{color:var(--go);font-size:12px}
+  .panel .need{color:var(--bad);margin:0 0 12px;font-size:12.5px}
   .stale{opacity:.45}
   .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
        background:var(--go);margin-right:6px;vertical-align:1px}
@@ -180,6 +208,48 @@
     <div class="scroll" id="histRows"></div>
   </div>
   <div class="foot" id="foot"></div>
+  <button class="setlink" id="setlink" aria-expanded="false"
+          aria-controls="panel">settings</button>
+  <!-- Four things, all of them this device's rather than this board's: the walk the
+       alert is aimed off, where that alert goes, and a key for when MBTA is
+       rate-limiting this address. The topic is one person's phone and the key is one
+       person's quota, and this page is served from a public origin -- so none of it
+       is in the page, the repo or model.json. It is typed into this browser and
+       stays there. -->
+  <div class="panel" id="panel" hidden>
+    <h2>This device</h2>
+    <p class="need" id="setneed" hidden></p>
+    <form id="setform">
+      <label><b>Walk to the platform</b>
+        <span class="why">Minutes from your front door to standing on it. The
+          leave-now alert is aimed this far ahead of the train.</span>
+        <input id="setwalk" type="text" inputmode="decimal" autocomplete="off"
+               spellcheck="false" placeholder="6.5"></label>
+      <label><b>ntfy topic</b>
+        <span class="why">Where a leave-now alert is published. Any topic you have
+          subscribed to in the ntfy app; without one the bell has nowhere to go.</span>
+        <input id="setntfy" type="text" autocomplete="off" autocapitalize="off"
+               spellcheck="false" placeholder="topic name"></label>
+      <label><b>Command topic <span style="font-weight:400">(optional)</span></b>
+        <span class="why">Lets the notifier keep refining an alert after you close
+          this page — a slip, a no-show, the recovery. Blank is fine: the bell is
+          then one scheduled push and nothing more.</span>
+        <input id="setcmd" type="text" autocomplete="off" autocapitalize="off"
+               spellcheck="false" placeholder="command topic"></label>
+      <label><b>MBTA API key <span style="font-weight:400">(optional)</span></b>
+        <span class="why">Only needed while MBTA is rate-limiting this address —
+          their free limit is 20 requests a minute per address and one open board is
+          most of it. Free and instant from
+          <a href="https://api-v3.mbta.com" target="_blank" rel="noopener">api-v3.mbta.com</a>.</span>
+        <input id="setkey" type="text" autocomplete="off" autocapitalize="off"
+               spellcheck="false" placeholder="paste API key"></label>
+      <div class="act">
+        <button type="submit">Save</button>
+        <button type="button" class="alt" id="setclose">Close</button>
+        <span class="said" id="setsaid"></span>
+      </div>
+    </form>
+  </div>
   <!-- Shown only while v3 is actually refusing us. A setting nobody is prompted
        for is a setting nobody sets -- but prompting on first run for something
        most riders never need is the other failure. This asks exactly when it
@@ -218,10 +288,13 @@ let data = null, lastOk = 0, version = null, dueLatch = null;
 // exactly ONE push, aimed where the train was when the bell was tapped, as the
 // fallback for a notifier that is not running -- and hands the train to the
 // notifier, which is the only place refinement can actually happen.
-const NTFY = localStorage.getItem("magoun.ntfy") || "";
+// Not const: the settings panel below writes both, and a reload to rebind them
+// would be a reload in the middle of the one thing the rider came here to do.
+// Magoun.store is app.js's accessor -- localStorage throws outright in private mode.
+let NTFY = Magoun.store.get("magoun.ntfy", "");
 // The command topic watch.py listens on. Optional: without it the bell behaves
 // exactly as before -- a scheduled push and no refinement once the page is gone.
-const NTFY_CMD = localStorage.getItem("magoun.cmd") || "";
+let NTFY_CMD = Magoun.store.get("magoun.cmd", "");
 const SEQ = "magoun-leave";
 // Armed state is persisted: an always-on tablet dashboard will be reloaded by the
 // browser under memory pressure, and losing the arm silently would stop the
@@ -247,34 +320,77 @@ document.addEventListener("visibilitychange", () => {
   poll();
 });
 
-// Ask for the command topic. Separate from the first-run prompt below, because
-// asking only there would never reach anyone who had used the bell before -- which
-// is everybody this feature is for. Their NTFY is already set, so that branch is
-// skipped forever, NTFY_CMD stays "" and the handoff silently never happens.
-// "no" is remembered, so declining does not mean being asked every time.
-function askForCmdTopic() {
-  if (NTFY_CMD || localStorage.getItem("magoun.cmd.declined")) return false;
-  const c = prompt("One-time setup: the ntfy COMMAND topic (MAGOUN_NTFY_CMD).\n\n"
-                   + "With it the notifier keeps refining this alert after you "
-                   + "close the page -- a slip, a no-show, the recovery. Without "
-                   + "it the bell is one scheduled push and nothing more.\n\n"
-                   + "Leave blank to skip; you will not be asked again.", "");
-  if (c === null) return false;
-  if (c.trim()) localStorage.setItem("magoun.cmd", c.trim());
-  else localStorage.setItem("magoun.cmd.declined", "1");
-  return true;
+// ---- settings, per device ----
+// The board reads fine with none of this set, so it is never in the way. Two things
+// route through it rather than a native prompt: a bell with nowhere to send an
+// alert, and the one-time question about the command topic.
+const NEED_TOPIC = "An alert needs somewhere to go. Give this device an ntfy topic "
+  + "\u2014 any topic you have subscribed to in the ntfy app \u2014 and the bell "
+  + "will work from then on.";
+const NEED_CMD = "One question, once. With a command topic the notifier keeps "
+  + "refining this alert after you close the page. Leave it blank and Save if you "
+  + "do not want that; you will not be asked again.";
+
+function openSettings(need) {
+  // walkSeconds() throws until the model has loaded -- it is the one source of the
+  // default -- and the panel has to open on a board that is still connecting.
+  let walk = "";
+  try { walk = (Magoun.walkSeconds() / 60).toFixed(1).replace(/\.0$/, ""); }
+  catch (e) { /* leave it blank rather than invent a default here */ }
+  $("#setwalk").value = walk;
+  $("#setntfy").value = NTFY;
+  $("#setcmd").value = NTFY_CMD;
+  $("#setkey").value = Magoun.store.get("magoun.mbtakey", "");
+  $("#setneed").textContent = need || "";
+  $("#setneed").hidden = !need;
+  $("#setsaid").textContent = "";
+  $("#panel").hidden = false;
+  $("#setlink").setAttribute("aria-expanded", "true");
+  $("#panel").scrollIntoView({block: "nearest"});
+  (need === NEED_CMD ? $("#setcmd") : $("#setntfy")).focus();
 }
 
+function closeSettings() {
+  $("#panel").hidden = true;
+  $("#setlink").setAttribute("aria-expanded", "false");
+}
+
+$("#setlink").onclick = () => $("#panel").hidden ? openSettings("") : closeSettings();
+$("#setclose").onclick = closeSettings;
+$("#setform").onsubmit = (e) => {
+  e.preventDefault();
+  // A walk is minutes here and seconds everywhere else; the one copy of the
+  // default is model.json's walk_s, so a blank or nonsense entry leaves it alone
+  // rather than writing a zero the alert would fire on.
+  const mins = parseFloat($("#setwalk").value);
+  if (isFinite(mins) && mins > 0)
+    Magoun.store.set("magoun.walk", String(Math.round(mins * 60)));
+  NTFY = $("#setntfy").value.trim();
+  NTFY_CMD = $("#setcmd").value.trim();
+  Magoun.store.set("magoun.ntfy", NTFY);
+  Magoun.store.set("magoun.cmd", NTFY_CMD);
+  // Saving IS the answer to the command-topic question, blank included. A board
+  // that asks every time is a board whose owner stops reading what it asks.
+  Magoun.store.set("magoun.cmd.asked", "1");
+  const key = $("#setkey").value.trim();
+  Magoun.store.set("magoun.mbtakey", key);
+  if (key) $("#keyask").hidden = true;
+  // The rider has just changed what the backoff was about, so retry now rather
+  // than serving out a penalty they have already dealt with.
+  if (feed) feed.refresh();
+  $("#setsaid").textContent = "saved on this device";
+  $("#setneed").hidden = true;
+  paint();
+};
+
 async function armAlert(next) {
-  if (!NTFY) {
-    const t = prompt("ntfy topic to notify (from ops/ntfy.env):", "");
-    if (!t) return;
-    localStorage.setItem("magoun.ntfy", t.trim());
-    askForCmdTopic();
-    return location.reload();
-  }
-  // An install that predates the handoff: ask once, then reload so NTFY_CMD binds.
-  if (!armed && askForCmdTopic()) return location.reload();
+  // Nowhere to send it: open the panel instead of arming, and say why.
+  if (!NTFY) return openSettings(NEED_TOPIC);
+  // Asked once, at the moment it would help. An install that predates the handoff
+  // has NTFY set and NTFY_CMD empty, so a question asked only on first run would
+  // never reach the entire population this feature is for.
+  if (!armed && !NTFY_CMD && Magoun.store.get("magoun.cmd.asked", "") !== "1")
+    return openSettings(NEED_CMD);
   const walk = Magoun.walkSeconds();
   const now = Math.round(Date.now()/1000);
   const leaveAt = Math.max(Math.round(next.lo - walk), now + 11);
