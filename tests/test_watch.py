@@ -15,6 +15,7 @@ debounce and the decision to fire are the real code.
 import os
 import pathlib
 import threading
+import urllib.error
 import sys
 import time
 
@@ -584,3 +585,75 @@ def test_a_slow_push_does_not_block_the_tick(w, feed, monkeypatch):
     release.set()
     cmd.join(timeout=10)
     assert done, "the tick was stuck behind a push holding the plan lock"
+
+
+# --- live run 2026-09-26: the revision told a rider on the platform to "leave" ---
+
+def test_a_revision_after_leave_now_says_how_far_off_not_when_to_go(w, feed):
+    """Measured: told to leave 1:31, train never came, and the 1:41 revision read
+    "leave 1:42" to someone who had been standing at Magoun for four minutes."""
+    eta = feed.now + 600
+    arm(feed, eta, vehicle="G-10065", fired={"leave": True})
+    feed.rows = [row(eta + 400, vehicle="G-10065")]
+    w.tick()
+    msg = feed.sent[0]["message"]
+    assert "leave" not in msg, msg
+    assert "min away" in msg, msg
+
+
+def test_a_revision_before_leave_now_still_says_when_to_go(w, feed):
+    eta = feed.now + 1800
+    arm(feed, eta, vehicle="G-10065")
+    feed.rows = [row(eta + 400, vehicle="G-10065")]
+    w.tick()
+    assert "leave" in feed.sent[0]["message"]
+
+
+# --- live run 2026-09-26: HTTP 429 was swallowed as a generic bad tick ---
+
+def _throttle(*a, **k):
+    raise urllib.error.HTTPError("u", 429, "Too Many Requests", {}, None)
+
+
+def test_being_rate_limited_is_reported_as_itself(w, feed, monkeypatch, capsys):
+    """Two v3 requests per tick against a 20/min unauthenticated limit, with the
+    archiver already polling. Logged as "tick error" it is invisible."""
+    arm(feed, feed.now + 1200, vehicle="G-10065")
+    monkeypatch.setattr(w, "tick", _throttle)
+    n = watch.run_tick(w, 0)
+    assert n == 1
+    assert "THROTTLED" in capsys.readouterr().err
+
+
+def test_a_notifier_blinded_for_five_minutes_says_so_once(w, feed, monkeypatch):
+    """Silence is what throttling costs, and silence looks exactly like "no train
+    yet". The rider has to be able to tell those apart."""
+    arm(feed, feed.now + 1200, vehicle="G-10065")
+    monkeypatch.setattr(w, "tick", _throttle)
+    n = 0
+    for _ in range(watch.BLIND_TICKS * 2):
+        n = watch.run_tick(w, n)
+    assert feed.titles == ["Notifier is blind"], "once, not every tick"
+    assert n == watch.BLIND_TICKS * 2
+
+
+def test_a_healthy_tick_clears_the_throttle_count(w, feed):
+    arm(feed, feed.now + 1200, vehicle="G-10065")
+    feed.rows = [row(feed.now + 1200, vehicle="G-10065")]
+    assert watch.run_tick(w, 9) == 0
+
+
+def test_nothing_is_pushed_about_throttling_with_no_plan(w, feed, monkeypatch):
+    """A blind notifier with nothing armed is not the rider's problem."""
+    monkeypatch.setattr(w, "tick", _throttle)
+    n = 0
+    for _ in range(watch.BLIND_TICKS + 2):
+        n = watch.run_tick(w, n)
+    assert feed.sent == []
+
+
+def test_a_real_fault_is_not_counted_as_throttling(w, feed, monkeypatch, capsys):
+    arm(feed, feed.now + 1200, vehicle="G-10065")
+    monkeypatch.setattr(w, "tick", lambda: (_ for _ in ()).throw(ValueError("boom")))
+    assert watch.run_tick(w, 3) == 3, "a different fault must not advance the count"
+    assert "tick error: ValueError" in capsys.readouterr().err

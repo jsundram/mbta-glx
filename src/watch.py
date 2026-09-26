@@ -36,6 +36,10 @@ DRIFT_ALERT = 240    # first "running late" alert once the train slips this far
 REVISE_BY = 90       # announce a new ETA once it moves this far from the last one
 REVISE_GAP = 90      # ...but no more often than this, so revisions cannot spam
 ADJUST_SOURCES = ("departed Medford/Tufts", "departed Ball Sq")
+# Consecutive throttled ticks before the rider is told the notifier has gone
+# blind. ~5 min: long enough to ride out a burst, short enough to still be
+# actionable before a leave-now would have fired.
+BLIND_TICKS = 15
 
 
 def load() -> dict:
@@ -389,10 +393,18 @@ class Watcher:
         if abs(row["eta"] - last) < REVISE_BY or since < REVISE_GAP:
             return
         delta = row["eta"] - com.get("original_eta", row["eta"])
+        # Once leave-now has gone out, a leave time is the wrong advice: the rider
+        # is walking, or already standing on the platform. Measured live on
+        # 2026-09-26 -- told to leave at 1:31, the train never came, and the 1:41
+        # revision said "leave 1:42" to someone who had been there four minutes.
+        # What is true wherever they are is how far off the train now is.
+        where = (f"{(row['eta'] - now) / 60:.0f} min away"
+                 if p.get("fired", {}).get("leave")
+                 else f"leave {fmt(row['lo'] - p['walk'])}")
         notify.send(
             why,
             f"Now expected {fmt(row['eta'])} ({delta/60:+.0f} min vs your pick) · "
-            f"+/-{(row['hi']-row['lo'])/2:.0f}s · leave {fmt(row['lo'] - p['walk'])}",
+            f"+/-{(row['hi']-row['lo'])/2:.0f}s · {where}",
             priority=3, tags=["hourglass"],
             actions=[notify.reply_action("Show options", "brief")])
         com["announced_eta"] = row["eta"]
@@ -570,6 +582,38 @@ class Watcher:
         return None
 
 
+def run_tick(w: "Watcher", throttled: int) -> int:
+    """One tick and its error handling. Returns the consecutive-throttle count.
+
+    Separate from main's loop only so it can be tested: the behaviour that matters
+    here is what happens on the bad ticks, and a `while True` cannot be asserted on.
+    """
+    try:
+        w.tick()
+        return 0
+    except Exception as e:  # noqa: BLE001 - never let one tick kill the notifier
+        # A throttled notifier is not a broken one, but it is not a working one
+        # either, and "tick error" buries it among real faults. v3 allows 20
+        # requests/minute unauthenticated and a snapshot is two of them, so one
+        # extra poller is enough to do this -- measured 2026-09-26.
+        if "429" not in str(e):
+            print(f"tick error: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+            return throttled
+        throttled += 1
+        print(f"THROTTLED by api-v3 ({throttled} ticks): set MBTA_API_KEY, "
+              "or stop another poller", file=sys.stderr, flush=True)
+        # Silence is what this costs, and silence is indistinguishable from "no
+        # train yet". Say it once, and only when a plan is riding on it -- ntfy's
+        # own reconnect loop earned this lesson already.
+        if throttled == BLIND_TICKS and (load() or {}).get("committed"):
+            notify.send("Notifier is blind",
+                        f"MBTA has been rate-limiting me for "
+                        f"{BLIND_TICKS * TICK / 60:.0f} min. I cannot see your "
+                        "train; check the board yourself.",
+                        priority=4, tags=["warning"])
+        return throttled
+
+
 def main() -> None:
     if not notify.TOPIC or not notify.CMD:
         print("set MAGOUN_NTFY_TOPIC and MAGOUN_NTFY_CMD", file=sys.stderr)
@@ -586,11 +630,9 @@ def main() -> None:
     threading.Thread(target=notify.watch_commands, args=(w.on_command,),
                      daemon=True).start()
     print(f"watching · topic {notify.TOPIC} · cmd {notify.CMD}", flush=True)
+    throttled = 0
     while True:
-        try:
-            w.tick()
-        except Exception as e:  # noqa: BLE001 - never let one tick kill the notifier
-            print(f"tick error: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        throttled = run_tick(w, throttled)
         time.sleep(TICK)
 
 
