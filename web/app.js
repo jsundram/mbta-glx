@@ -463,9 +463,34 @@ function start(onData, onError) {
   const berthTracker = new BerthTracker(JSON.parse(store.get("magoun.berths", "{}")));
   const arrivals = new ArrivalTracker();
   let modelText = null, lastAlerts = 0, lastModelCheck = 0;
+  let fromScript = false;   // model came from model.js, not model.json
+
+  /** The model, as text, so a republished one can be spotted by comparison.
+   *
+   *  Measured 2026-09-26, Chromium: a board opened as file:// cannot fetch a
+   *  sibling file at all -- "URL scheme file is not supported", before any CORS
+   *  question. A script tag is allowed, so the same bytes are also published as
+   *  model.js and that is the fallback. fit.py writes both. */
+  async function readModelText() {
+    try {
+      return await (await fetch("model.json", {cache: "no-store"})).text();
+    } catch (e) {
+      await new Promise((ok, no) => {
+        const el = document.createElement("script");
+        el.src = "model.js";
+        el.onload = ok;
+        el.onerror = () => no(e);
+        document.head.appendChild(el);
+      });
+      fromScript = true;
+      const t = (globalThis.Magoun || {})._modelText;
+      if (!t) throw e;
+      return t;
+    }
+  }
 
   async function loadModel() {
-    const text = await (await fetch("model.json", {cache: "no-store"})).text();
+    const text = await readModelText();
     if (modelText !== null && text !== modelText) return location.reload();
     modelText = text;
     model = new Model(JSON.parse(text));
@@ -479,7 +504,10 @@ function start(onData, onError) {
     if (stopped) return;
     try {
       const now = Date.now() / 1000;
-      if (!model || now - lastModelCheck > MODEL_RECHECK_MS / 1000) {
+      // Re-read the model occasionally so a refit reaches a tablet left running.
+      // Not worth it on the file:// path: re-injecting the script cannot see a
+      // newer file, and the page has to be reloaded there anyway.
+      if (!model || (!fromScript && now - lastModelCheck > MODEL_RECHECK_MS / 1000)) {
         lastModelCheck = now;
         await loadModel();
       }

@@ -13,12 +13,20 @@ OUT = ROOT / "data" / "model.json"
 # The static board fetches model.json as a sibling asset, so a refit has to
 # reach web/ too or the browser keeps predicting from the previous rating.
 WEB_OUT = ROOT / "web" / "model.json"
+# ...and as a script, because a board opened from file:// is not allowed to
+# fetch a sibling file at all (measured: Chromium refuses the scheme outright).
+WEB_JS = ROOT / "web" / "model.js"
 DESTINATIONS = {
     "70502": "Lechmere", "70206": "North Station", "70202": "Government Center",
     "70199": "Park Street", "70159": "Boylston", "70155": "Copley",
 }
 GRID = [round(q, 3) for q in np.arange(0.02, 1.0, 0.02)]
 
+
+def _as_script(text: str) -> str:
+    """The same bytes, reachable from file:// where fetch() is not."""
+    return ("globalThis.Magoun = globalThis.Magoun || {};\n"
+            "Magoun._modelText = " + json.dumps(text) + ";\n")
 
 def main() -> None:
     df = pl.read_parquet("data/magoun.parquet").filter(pl.col("magoun_arr").is_not_null())
@@ -96,6 +104,7 @@ def main() -> None:
     model["headway_median_s"] = float(np.median(hw))
     OUT.write_text(json.dumps(model))
     WEB_OUT.write_text(OUT.read_text())
+    WEB_JS.write_text(_as_script(OUT.read_text()))
     print(f"wrote {OUT} and {WEB_OUT} from {model['n_legs']} legs over {model['days']} days")
     print("  median headway", round(model["headway_median_s"] / 60, 1), "min")
     for t in TIERS:

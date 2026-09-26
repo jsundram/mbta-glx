@@ -1,0 +1,465 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Magoun Inbound</title>
+<!-- The static board. Identical to src/status.html except that the data comes
+     from web/app.js -- which fetches api-v3.mbta.com directly and runs the
+     ported prediction -- instead of the Mac server's /status. Runs from
+     file://, GitHub Pages, or anywhere else that can serve two files. -->
+<style>
+  :root{--bg:#f6f8f5;--card:#fff;--ink:#16201b;--dim:#5e6a63;--line:#dfe6df;
+        --go:#00843D;--warn:#9c5c17;--bad:#9e2f2f;
+        --mono:"SF Mono",ui-monospace,Menlo,monospace}
+  @media (prefers-color-scheme:dark){:root{--bg:#11150f;--card:#181d19;--ink:#e8efe8;
+        --dim:#8d9a90;--line:#28302a;--go:#3fb46f;--warn:#d69a46;--bad:#e07070}}
+  *{box-sizing:border-box}
+  body{margin:0;padding:20px 16px 40px;background:var(--bg);color:var(--ink);
+       font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:520px;margin:0 auto}
+  header{display:flex;justify-content:space-between;align-items:baseline;
+         border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:18px}
+  h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.01em}
+  .clock{font-family:var(--mono);font-size:15px;color:var(--dim);
+         font-variant-numeric:tabular-nums}
+  .hero{background:var(--card);border:1px solid var(--line);border-radius:10px;
+        padding:22px 20px;margin-bottom:12px}
+  .label{font-size:12px;letter-spacing:.09em;text-transform:uppercase;
+         color:var(--dim);margin-bottom:8px}
+  .big{font-family:var(--mono);font-size:clamp(44px,15vw,64px);line-height:1;
+       font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+  .sub{color:var(--dim);font-size:13.5px;margin-top:10px}
+  .here{border-color:var(--go)}
+  .here .big{color:var(--go)}
+  .late{color:var(--warn)} .vlate{color:var(--bad)} .ontime{color:var(--go)}
+  .row{display:flex;justify-content:space-between;padding:9px 0;
+       border-top:1px solid var(--line);font-size:14px}
+  .row:first-child{border-top:0}
+  .row.skipped{color:var(--dim)}
+  .row.skipped .v{text-decoration:line-through;opacity:.7}
+  .list{background:var(--card);border:1px solid var(--line);border-radius:10px;
+        padding:0 16px 6px;margin-bottom:12px}
+  .listhead{font-size:11px;letter-spacing:.09em;text-transform:uppercase;
+            color:var(--dim);margin:0;padding:13px 0 4px;font-weight:600}
+  .k{color:var(--dim)} .v{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  /* line map, drawn the way the T draws it: a thick line in the route colour,
+     white-centred station dots, terminus capped. */
+  .map{background:var(--card);border:1px solid var(--line);border-radius:10px;
+       padding:16px 14px 14px;margin-bottom:12px}
+  .maphead{display:flex;justify-content:space-between;font-size:11px;
+           letter-spacing:.08em;text-transform:uppercase;color:var(--dim);
+           margin-bottom:10px;padding:0 2px}
+  .term{display:flex;align-items:center;justify-content:center;gap:10px;
+        border:2px solid var(--go);border-radius:999px;padding:7px 14px;
+        background:color-mix(in srgb,var(--go) 10%,var(--card))}
+  .term b{font-size:13px;font-weight:700;letter-spacing:.01em;color:var(--ink)}
+  .term .cars{display:flex;gap:5px;min-height:14px;align-items:center}
+  .waitcar{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--card);
+           background:var(--go);border-radius:4px;padding:2px 5px;letter-spacing:-.02em}
+  .grid{position:relative;display:grid;padding-top:34px;
+        grid-template-columns:64px 1fr 64px;align-items:center}
+  .rail{position:absolute;top:-2px;bottom:6px;width:7px;border-radius:4px;
+        background:var(--go);z-index:0}
+  .rail.l{left:44px} .rail.r{right:44px}
+  .stopname{text-align:center;font-size:13.5px;color:var(--ink);
+            padding:11px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .stopname.me{font-weight:700}
+  /* station: white centre, route-colour ring -- the T's standard marker */
+  .node{position:absolute;width:13px;height:13px;border-radius:50%;
+        background:var(--card);border:3px solid var(--go);
+        transform:translate(-50%,-50%);box-sizing:border-box;z-index:1}
+  .node.l{left:47.5px} .node.r{right:47.5px;transform:translate(50%,-50%)}
+  .node.me{width:17px;height:17px;border-width:4px}
+  /* train: a little car, nose-first, carrying its lead car number */
+  .grid{--carw:19px;--carh:27px}
+  .train{position:absolute;width:var(--carw);height:var(--carh);border-radius:7px;
+         background:linear-gradient(180deg,#2c3a31,#16201b);
+         transform:translate(-50%,-50%);transition:top .6s linear;z-index:3;
+         box-shadow:0 0 0 2.5px var(--card),0 1px 3px rgba(0,0,0,.35)}
+  :root:not([data-theme="light"]) .train{background:linear-gradient(180deg,#3a4a40,#232c26)}
+  .train.l{left:47.5px} .train.r{right:47.5px;transform:translate(50%,-50%)}
+  /* windscreen at the leading end + two headlights */
+  .train .glass{position:absolute;left:3px;right:3px;height:7px;border-radius:4px;
+        background:color-mix(in srgb,var(--go) 55%,#cfe9d8)}
+  .train.l .glass{bottom:3px} .train.r .glass{top:3px}
+  .train .lamp{position:absolute;width:3px;height:3px;border-radius:50%;
+        background:#ffe9a8;opacity:.9}
+  .train.l .lamp{bottom:0.5px} .train.r .lamp{top:0.5px}
+  .train .lamp.a{left:3.5px} .train .lamp.b{right:3.5px}
+  /* the car number, parked outside the rail so it never covers the line */
+  .carno{position:absolute;font-family:var(--mono);font-size:10px;font-weight:600;
+         color:var(--dim);background:var(--card);border:1px solid var(--line);
+         border-radius:4px;padding:1px 4px;transform:translateY(-50%);
+         transition:top .6s linear;letter-spacing:-.02em;line-height:1.3;
+         white-space:nowrap;z-index:4}
+  .carno.l{left:0} .carno.r{right:0}
+  .train.moving{animation:glide 1.8s ease-in-out infinite}
+  @keyframes glide{0%,100%{filter:brightness(1)}50%{filter:brightness(1.35)}}
+  .train.stale{opacity:.4;animation:none}
+  .train.deadhead{background:repeating-linear-gradient(45deg,
+        var(--dim) 0 3px,transparent 3px 6px);opacity:.75}
+  .train.deadhead .glass{background:var(--card);opacity:.6}
+  @media (prefers-reduced-motion:reduce){
+    .train{transition:none} .train.moving{animation:none;opacity:.7}
+  }
+  .alert{background:color-mix(in srgb,var(--bad) 9%,var(--card));
+         border:1px solid var(--bad);border-left-width:4px;border-radius:8px;
+         padding:11px 14px;margin-bottom:12px;font-size:13.5px;line-height:1.45}
+  .alert b{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+           color:var(--bad);margin-bottom:3px}
+  .hist{background:var(--card);border:1px solid var(--line);border-radius:10px;
+        margin-bottom:12px;overflow:hidden}
+  .hist h2{font-size:11px;letter-spacing:.09em;text-transform:uppercase;
+           color:var(--dim);margin:0;padding:13px 16px 9px;font-weight:600;
+           display:flex;justify-content:space-between;align-items:baseline}
+  .hist h2 em{font-style:normal;text-transform:none;letter-spacing:0;font-size:12px}
+  .scroll{max-height:150px;overflow-y:auto;padding:0 16px 10px}
+  .hrow{display:flex;justify-content:space-between;gap:10px;padding:7px 0;
+        border-top:1px solid var(--line);font-size:13.5px;
+        font-variant-numeric:tabular-nums}
+  .hrow .t{font-family:var(--mono);color:var(--dim)}
+  .hrow .o{font-weight:600}
+  .o.good{color:var(--go)} .o.meh{color:var(--warn)} .o.bad{color:var(--bad)}
+  .bell{background:none;border:1px solid var(--line);border-radius:999px;
+        color:var(--dim);font:inherit;font-size:11px;padding:3px 9px;cursor:pointer;
+        margin-left:8px;white-space:nowrap}
+  .bell:hover{border-color:var(--go);color:var(--go)}
+  .bell.armed{border-color:var(--go);color:var(--card);background:var(--go)}
+  .bell:focus-visible{outline:2px solid var(--go);outline-offset:2px}
+  .foot{color:var(--dim);font-size:12px;margin-top:14px;line-height:1.6}
+  .stale{opacity:.45}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
+       background:var(--go);margin-right:6px;vertical-align:1px}
+  .dot.off{background:var(--bad)}
+</style>
+<div class="wrap">
+  <header>
+    <h1>Magoun Square &rarr; downtown</h1>
+    <span class="clock" id="clock">--:--:--</span>
+  </header>
+  <div id="alerts"></div>
+  <div id="hero" class="hero">
+    <div class="label" id="heroLabel">Next train</div>
+    <div class="big" id="heroBig">--:--</div>
+    <div class="sub" id="heroSub">connecting&hellip;</div>
+  </div>
+  <div class="list"><h2 class="listhead">Upcoming</h2><div id="following"></div></div>
+  <div class="map">
+    <div class="maphead"><span>&darr; inbound</span><span>outbound &uarr;</span></div>
+    <div class="term" id="termBox"><b>Medford/Tufts</b><span class="cars" id="termCars"></span></div>
+    <div class="grid" id="grid">
+      <div class="rail l"></div><div class="rail r"></div>
+    </div>
+  </div>
+  <div class="hist" id="hist" hidden>
+    <h2><span>How it has been doing</span><em id="histScore">&nbsp;</em></h2>
+    <div class="scroll" id="histRows"></div>
+  </div>
+  <div class="foot" id="foot"></div>
+</div>
+<script src="app.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+let data = null, lastOk = 0, version = null, dueLatch = null;
+
+// ---- push, with no backend involved ----
+// ntfy accepts cross-origin POSTs and will hold a message until a future time
+// (`At`). Publishing again with the same Sequence-ID replaces the pending one, so
+// this page can keep an alert current while it is open, and the alert still fires
+// after the page is closed. Verified: reschedule delivers exactly once.
+const NTFY = localStorage.getItem("magoun.ntfy") || "";
+const SEQ = "magoun-leave";
+// Armed state is persisted: an always-on tablet dashboard will be reloaded by the
+// browser under memory pressure, and losing the arm silently would stop the
+// refinement that is the whole reason for leaving it open.
+let armed = localStorage.getItem("magoun.armed") === "1";
+
+// Keep the screen awake where the browser allows it, so the dashboard keeps
+// refining without relying on Auto-Lock being set to Never.
+let wakeLock = null;
+async function keepAwake() {
+  try {
+    if ("wakeLock" in navigator && !wakeLock) {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.addEventListener("release", () => { wakeLock = null; });
+    }
+  } catch (e) { /* unsupported or refused; Auto-Lock=Never is the fallback */ }
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  // Coming back from sleep: the pending alert may be stale, so refresh at once.
+  keepAwake();
+  window._lastArm = 0;
+  poll();
+});
+
+async function armAlert(next) {
+  if (!NTFY) {
+    const t = prompt("ntfy topic to notify (from ops/ntfy.env):", "");
+    if (!t) return;
+    localStorage.setItem("magoun.ntfy", t.trim());
+    return location.reload();
+  }
+  const walk = Magoun.walkSeconds();
+  const leaveAt = Math.max(Math.round(next.lo - walk), Math.round(Date.now()/1000) + 11);
+  try {
+    await fetch(`https://ntfy.sh/${NTFY}`, {
+      method: "POST",
+      headers: {
+        "At": String(leaveAt),
+        "Sequence-ID": SEQ,
+        "Priority": "5",
+        "Title": "Leave now",
+        "Tags": "runner",
+      },
+      body: `${hhmm(next.eta)} train from Magoun · ${Math.round((next.hi-next.lo)/2)}s band`,
+    });
+    armed = true;
+    localStorage.setItem("magoun.armed", "1");
+    localStorage.setItem("magoun.armedEta", String(Math.round(next.eta)));
+    paint();
+  } catch (e) { alert("could not set the alert: " + e.message); }
+}
+
+async function cancelAlert() {
+  try {
+    await fetch(`https://ntfy.sh/${NTFY}/${SEQ}/delete`);
+  } catch (e) { /* the alert simply stays scheduled */ }
+  armed = false;
+  localStorage.removeItem("magoun.armed");
+  localStorage.removeItem("magoun.armedEta");
+  paint();
+}
+
+const pad = n => String(Math.floor(n)).padStart(2, "0");
+const mmss = s => (s < 0 ? "-" : "") + pad(Math.abs(s) / 60) + ":" + pad(Math.abs(s) % 60);
+const hhmm = t => new Date(t * 1000).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
+
+function paint() {
+  $("#clock").textContent = new Date().toLocaleTimeString([], {hour12: false});
+  if (!data) return;
+  // One clock offset, measured at fetch, converts client time to server time.
+  // Everything below is then a plain difference of absolute timestamps, which is
+  // what makes the counters tick in real seconds instead of jumping per poll.
+  const now = Date.now() / 1000 + data.offset;
+  const hero = $("#hero");
+  const at = (data.at_station || [])[0];
+  if (at) {
+    hero.classList.add("here");
+    dueLatch = null;
+    $("#heroLabel").textContent = "Train at the station";
+    $("#heroBig").textContent = mmss(now - at.since);
+    const late = at.late_s;
+    const tag = late == null ? "" :
+      late > 120 ? `<span class="vlate">${mmss(late)} late</span>` :
+      late > 30  ? `<span class="late">${mmss(late)} late</span>` :
+      late < -30 ? `<span class="late">${mmss(-late)} early</span>` :
+                   `<span class="ontime">on time</span>`;
+    $("#heroSub").innerHTML = `stopped here &middot; ${tag}`;
+  } else if (data.next) {
+    hero.classList.remove("here");
+    const left = data.next.eta - now;
+    // The feed nudges an imminent ETA forward a couple of seconds each poll, so a
+    // bare `left > 0` test flickers between "due" and 0:02. Latch "due" once it is
+    // close, and only release when it is clearly not.
+    if (left <= 30) dueLatch = data.next.eta;
+    else if (dueLatch && left > 75) dueLatch = null;
+    $("#heroLabel").textContent = "Next train expected in";
+    $("#heroBig").textContent = dueLatch ? "due" : mmss(left);
+    const band = Math.round((data.next.hi - data.next.lo) / 2);
+    $("#heroSub").innerHTML = `${hhmm(data.next.eta)} &plusmn;${band}s &middot; `
+      + `${data.next.source}` + (data.next.backed ? "" :
+        ` &middot; <span class="vlate">unconfirmed</span>`)
+      + `<button class="bell${armed ? " armed" : ""}" id="bell">`
+      + (armed ? "leave alert set" : "notify me") + `</button>`;
+    $("#bell").onclick = () => armed ? cancelAlert() : armAlert(data.next);
+  } else {
+    hero.classList.remove("here");
+    $("#heroLabel").textContent = "Next train";
+    $("#heroBig").textContent = "—";
+    $("#heroSub").textContent = "nothing predicted";
+  }
+  const al = (data.alerts || []).filter(a =>
+    ["SUSPENSION","STATION_CLOSURE","NO_SERVICE","SHUTTLE","DETOUR"].includes(a.effect));
+  $("#alerts").innerHTML = al.map(a =>
+    `<div class="alert"><b>${a.effect.replace("_"," ")}${
+      a.lifecycle === "UPCOMING" ? " · upcoming" : ""}</b>${
+      (a.header || a.short || "").slice(0, 190)}</div>`).join("");
+  // While the page is open, keep any armed alert pointed at the current ETA.
+  // Once the alert has fired there is nothing left to refine, so disarm.
+  if (armed) {
+    const target = +(localStorage.getItem("magoun.armedEta") || 0);
+    if (target && now > target + 60) {
+      armed = false;
+      localStorage.removeItem("magoun.armed");
+      localStorage.removeItem("magoun.armedEta");
+    } else if (data.next && Date.now()/1000 - (window._lastArm || 0) > 60) {
+      window._lastArm = Date.now()/1000;
+      armAlert(data.next);
+    }
+  }
+  drawMap();
+  $("#following").innerHTML = (data.following || []).map(r =>
+    r.skipped
+      ? `<div class="row skipped"><span class="k">not stopping here</span>`
+        + `<span class="v">${hhmm(r.eta)}</span></div>`
+      : `<div class="row"><span class="k">${r.source}</span>`
+        + `<span class="v">${hhmm(r.eta)} &middot; ${mmss(Math.max(0, r.eta - now))}</span></div>`
+  ).join("") || `<div class="row"><span class="k">no further trains predicted</span></div>`;
+
+  const u = data.upstream || {};
+  const age = now - lastOk;
+  document.body.classList.toggle("stale", age > 30);
+  $("#foot").innerHTML =
+    `<span class="dot${age > 30 ? " off" : ""}"></span>`
+    + (age > 30 ? `stale ${Math.round(age)}s` : `live`)
+    + (u.non_revenue ? ` &middot; ${u.non_revenue} not in service` : "")
+    + ` &middot; ${u.at_terminus ?? 0} at Medford/Tufts, `
+    + `${(u.departed_med || []).length} past Medford, `
+    + `${(u.departed_ball || []).length} past Ball Sq`
+    + ` &middot; median headway ${(data.headway_median_s / 60).toFixed(1)} min`
+    + (armed ? ` &middot; <span style="color:var(--go)">alert armed, refreshing</span>` : "");
+}
+
+let rowTops = [];
+
+function drawMap() {
+  const g = $("#grid");
+  const stops = data.stops || [];
+  // The terminus is its own box above the rails, so it is row 0 of the coordinate
+  // space but is NOT repeated in the stop list below.
+  const below = stops.slice(1);
+  if (!g.dataset.built && below.length) {
+    g.querySelectorAll(".stopname,.node,.train").forEach(e => e.remove());
+    below.forEach(name => {
+      const d = document.createElement("div");
+      d.className = "stopname" + (name.startsWith("Magoun") ? " me" : "");
+      d.textContent = name;
+      d.style.gridColumn = "2";
+      g.appendChild(d);
+    });
+    g.dataset.built = "1";
+  }
+  const names = [...g.querySelectorAll(".stopname")];
+  if (!names.length) return;
+  const gr = g.getBoundingClientRect();
+  const tr = $("#termBox").getBoundingClientRect();
+  // Row 0 is the terminus box centre, expressed in grid coordinates (usually
+  // negative, i.e. above the rails). Rows 1..n are the stops below it.
+  rowTops = [tr.top + tr.height / 2 - gr.top].concat(
+    names.map(n => n.getBoundingClientRect().top - gr.top
+                    + n.getBoundingClientRect().height / 2));
+
+  g.querySelectorAll(".node").forEach(e => e.remove());
+  rowTops.slice(1).forEach((y, i) => {
+    for (const side of ["l", "r"]) {
+      const n = document.createElement("div");
+      n.className = "node " + side + (below[i].startsWith("Magoun") ? " me" : "");
+      n.style.top = y + "px";
+      g.appendChild(n);
+    }
+  });
+
+  const posY = p => {
+    const i = Math.max(0, Math.min(rowTops.length - 1, Math.floor(p)));
+    const j = Math.max(0, Math.min(rowTops.length - 1, Math.ceil(p)));
+    return rowTops[i] + (rowTops[j] - rowTops[i]) * (p - Math.floor(p));
+  };
+
+  const want = new Map();
+  for (const t of (data.line || [])) {
+    if (t.dir === 0 && t.pos <= 0.01 && t.stopped) continue;  // shown in terminus box
+    want.set(t.id, t);
+  }
+  for (const el of [...g.querySelectorAll(".train,.carno")])
+    if (!want.has(el.dataset.id)) el.remove();
+  // Two trains can share a position; nudge them apart so both stay readable.
+  const used = {0: [], 1: []};
+  for (const [id, t] of want) {
+    let y = posY(t.pos);
+    const lane = used[t.dir];
+    while (lane.some(v => Math.abs(v - y) < 20)) y += 20;
+    lane.push(y);
+
+    let el = g.querySelector(`.train[data-id="${CSS.escape(id)}"]`);
+    if (!el) {
+      el = document.createElement("div");
+      el.dataset.id = id;
+      el.innerHTML = `<span class="glass"></span>`
+        + `<span class="lamp a"></span><span class="lamp b"></span>`;
+      g.appendChild(el);
+    }
+    el.className = "train " + (t.dir === 0 ? "l" : "r")
+      + (t.stopped ? "" : " moving") + (t.stale ? " stale" : "")
+      + (t.revenue === false ? " deadhead" : "");
+    el.style.top = y + "px";
+    el.title = (t.label || id) + (t.stopped ? " · stopped" : " · moving")
+      + (t.revenue === false ? " · not in service, runs express" : "");
+
+    let tag = g.querySelector(`.carno[data-id="${CSS.escape(id)}"]`);
+    if (t.car) {
+      if (!tag) {
+        tag = document.createElement("div");
+        tag.dataset.id = id;
+        g.appendChild(tag);
+      }
+      tag.className = "carno " + (t.dir === 0 ? "l" : "r");
+      tag.textContent = t.car;
+      tag.style.top = y + "px";
+      tag.title = t.label || "";
+    } else if (tag) tag.remove();
+  }
+
+  // Terminus box: inbound trains berthed at Medford/Tufts, ready to come back.
+  const atTerm = (data.line || []).filter(t => t.dir === 0 && t.pos <= 0.01 && t.stopped);
+  $("#termCars").innerHTML = atTerm.length
+    ? atTerm.map(t => `<span class="waitcar" title="${t.label || t.id}">`
+        + `${t.car || "?"}</span>`).join("")
+    : `<span style="font-size:12px;color:var(--dim)">no trains waiting</span>`;
+}
+
+/** The board's self-score, published daily by the backend as stats.json (M3).
+ *  Absent on a board that has never been published to -- hide the panel rather
+ *  than show an empty one. Platform wait is the rider's metric, but platform wait
+ *  alone rewards dawdling, so door-to-train is shown beside it. */
+async function history() {
+  try {
+    const d = await (await fetch("stats.json", {cache: "no-store"})).json();
+    $("#histRows").innerHTML = (d.by_lead || []).map(b => {
+      const cls = Math.abs(b.p50) <= 60 ? "good" : Math.abs(b.p50) <= 180 ? "meh" : "bad";
+      return `<div class="hrow"><span class="t">${b.bin} `
+           + `<span style="opacity:.6">&middot; n=${b.n}</span></span>`
+           + `<span class="o ${cls}">p50 ${b.p50 > 0 ? "+" : ""}${b.p50}s `
+           + `<span style="opacity:.6">(${b.p10}&hellip;${b.p90})</span></span></div>`;
+    }).join("") || `<div class="hrow"><span class="t">no scored days yet</span></div>`;
+    $("#histScore").textContent =
+      `caught ${d.caught}/${d.of} · wait ${(d.mean_platform_wait_s/60).toFixed(1)} min`
+      + ` · door-to-train ${(d.mean_door_to_train_s/60).toFixed(1)} min`
+      + ` · ${d.window_days}d to ${d.as_of}`;
+    $("#hist").hidden = false;
+  } catch (e) { $("#hist").hidden = true; }
+}
+
+// The one real change from src/status.html: app.js polls MBTA and computes the
+// rows here, so there is no server to ask. Everything above is untouched.
+let feed = null;
+
+function onData(d) {
+  // `version` is the model's identity, so a refit published under a tablet left
+  // running reaches the rider the same way a server restart used to.
+  if (version && d.version !== version) return location.reload();
+  version = d.version;
+  d.offset = d.now - Date.now() / 1000;    // our own clock; kept for paint()
+  data = d;
+  lastOk = Date.now() / 1000;
+  paint();
+}
+
+function poll() { if (feed) feed.refresh(); }   // visibilitychange wants this
+
+keepAwake();
+feed = Magoun.start(onData, () => paint());
+setInterval(paint, 250);
+setInterval(history, 60000);
+history();
+</script>
