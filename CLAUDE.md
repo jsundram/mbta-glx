@@ -37,6 +37,31 @@ uv run python src/rating.py --check              # has the schedule rating moved
 
 `ops/install.sh` is idempotent and must not be run with `sudo`.
 
+## Checks the suite cannot do
+
+Neither is collected by pytest, both need the real world, and both exist because
+the things they catch are invisible to reading. Run them when you touch what they
+cover — a green suite is not evidence about either.
+
+```bash
+# the board in a real browser: file:// and over HTTP, ~90 s
+PLAYWRIGHT_BROWSERS_PATH=~/.cache/ms-playwright \
+  uv run --with playwright==1.61.0 python tests/board_smoke.py
+# the notifier against the live feed and a real ntfy round trip, ~25 min
+uv run --with numpy python tests/live_notifier.py
+```
+
+- **`board_smoke.py`** after any change to `web/` — a `file://` board cannot fetch
+  a sibling file at all, which no unit test can see.
+- **`live_notifier.py`** after any change to `watch.py`, `notify.py`, `brief.py` or
+  the board's handoff, and before claiming M5 works. It arms a train past MBTA's
+  horizon, drops the page, and reports which triggers actually fired. It mints
+  throwaway ntfy topics and a scratch plan file, so it never touches
+  `ops/ntfy.env`, `data/plan.json` or the running notifier; `--real-topics` opts
+  in to the phone deliberately. A revision needs a real slip and a recovery needs
+  a real no-show, so it names what it could *not* exercise rather than reporting a
+  quiet window as success.
+
 `web/` **is** the static origin — Pages uploads it as-is. `publish.py` moves files
 and never derives them; `fit.py` and `stats.py` are what write `data/`.
 
@@ -153,6 +178,14 @@ without anyone noticing.
   "file" is not supported`) — CORS never enters into it. Hence `web/model.js`, the
   same bytes as a script; `fit.py` writes it and a test compares them. Cross-origin
   fetches to `api-v3.mbta.com` do work from `file://`.
+- **The v3 API is 20 requests/minute unauthenticated, and this repo has several
+  pollers.** `service.snapshot()` is *two* requests, so the archiver at 15 s is
+  ~8/min and a notifier tick at 20 s is another ~6/min. Add a second notifier — a
+  live test alongside the launchd one — and it tips over into **HTTP 429**, which
+  `watch.main` swallows as a bad tick and `brief.health` never sees at all. Set
+  `MBTA_API_KEY` (`service.KEY` already reads it) before running anything extra,
+  or stop the other pollers first. Measured: two notifiers plus the archiver
+  throttled within six minutes.
 - The v3 `/schedules` endpoint only serves ~8 days back. Daily snapshots are the
   only way to keep them; an un-captured day is gone.
 

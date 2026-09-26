@@ -370,10 +370,55 @@ stubbed — where a snapshot comes from, what `etas` makes of it, where a push g
 Each fix was reverted separately and fails its own test and no other.
 
 **Done when:** an alert armed at 08:00 and then abandoned still tracks a train
-that slips. Done —
-`test_an_armed_alert_tracks_a_slip_with_no_page_open` arms by the path the bell
-uses, drops the page, and follows the train through a five-minute slip.
-Not yet demonstrated against a live train and the real topics.
+that slips. **Done, and demonstrated live** — `tests/live_notifier.py`, 2026-09-26:
+
+```
+13:24:15  ARMING 13:39:19 · schedule · veh=None · leave 13:31:08
+13:24:17  command: 'arm 1790444359 -'         <- real ntfy round trip
+13:31:11  fired LEAVE NOW for 1:39 via schedule
+13:37:23  no match for 1:39 (1/12)            <- the train stopped being predicted
+13:41:07  adopted 1:50 after 12 misses
+13:41:08  announced revision -> 1:50 (+11.0 min), veh=G-10089
+```
+
+Armed on a **schedule row 15 minutes out with no vehicle id** — past MBTA's 8–13
+min horizon, which is the gap this project exists for. Leave-now fired three
+seconds after the computed `lo - walk`. Then the 13:39 never came: twelve
+consecutive misses, ~240 s, the debounce rode them out in silence, and
+`_uncertain` adopted the 13:50 and said so — latching vehicle `G-10089`, which it
+never had when armed. That is the no-show path, on a real train, and it is the
+path that was dead code this morning.
+
+Both pushes were captured off the topic, text and buttons intact:
+
+```
+13:31:11  [Leave now]
+          1:39 train · 8 min out · via schedule (+/-159s)
+          [On my way -> left] [Next one -> bump] [Cancel -> cancel]
+13:41:08  [Your train may be running late]
+          Now expected 1:50 (+11 min vs your pick) · +/-150s · leave 1:42
+          [Show options -> brief]
+```
+
+Two details in there are the M5 work, confirmed live rather than by test. The
+leave-now carries **no** catch/on-time/95%-there line, because a board-armed plan
+has no destination and `_detail` returns None rather than inventing one. And the
+no-show push **asks rather than asserts** — "may be running late", not "that train
+vanished" — because at one headway the feed cannot tell those apart and the
+adopted train's id proves nothing about the one that went missing.
+
+The ~16 silent ticks after 13:41 matter too: with `announced_eta` set, every one
+of them ran the revision branch, which is the line that raised
+`UnboundLocalError` before it was fixed. None did.
+
+One genuine fault surfaced, and it was not in the notifier: **HTTP 429**. The v3
+API allows 20 requests/minute unauthenticated, `service.snapshot()` is two of
+them, and the archiver was already polling — a second notifier tipped it over
+within six minutes. `watch.main` swallows that as a bad tick. Set `MBTA_API_KEY`
+before running anything extra; see CLAUDE.md.
+
+Still unexercised live: a **skip** (protobuf-only, ~10/day system-wide) and a
+**slip** large enough to trip `DRIFT_ALERT` without the train vanishing first.
 
 ---
 
