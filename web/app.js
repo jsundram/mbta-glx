@@ -33,6 +33,25 @@ class Model {
   schedOffset(q) { return this._q(this.m.sched.q, q); }
   berthOffset(q) { return this._q(this.m.berth.q, q); }
 
+  /** How much later than MBTA's own prediction the train actually turns up.
+   *
+   *  Fitted, asymmetric, and a function of how far ahead the prediction was made
+   *  -- see service.Model.pred_offset for what it replaced and why. Interpolated
+   *  between bin centres, in the same order of operations as the Python, because
+   *  the contract test compares the resulting floats. */
+  predOffset(lead, q) {
+    const p = this.m.pred;
+    if (!p) throw new Error("model.json has no pred table");
+    const xs = p.lead_s, bins = p.bins;
+    if (lead <= xs[0]) return this._q(bins[0].q, q);
+    if (lead >= xs[xs.length - 1]) return this._q(bins[bins.length - 1].q, q);
+    let i = 0;
+    while (i + 1 < xs.length && lead >= xs[i + 1]) i++;
+    const f = (lead - xs[i]) / (xs[i + 1] - xs[i]);
+    const a = this._q(bins[i].q, q), b = this._q(bins[i + 1].q, q);
+    return a + (b - a) * f;
+  }
+
   get berthConst() {
     return [this.m.berth.turn_plus_run, this.m.berth.sched_bias];
   }
@@ -114,7 +133,6 @@ function byTimeThenVehicle(x, y) {
 function computeRows(now, preds, vehicles, model, walk, qs, horizon, berths,
                      slots, skipped) {
   const [ql, qm, qh] = qs;
-  const bands = model.need("band_s");
   const veto = model.need("veto_window_s");
   const dedupe = model.need("dedupe_s");
   const minGap = model.need("min_gap_s");
@@ -137,8 +155,12 @@ function computeRows(now, preds, vehicles, model, walk, qs, horizon, berths,
     let src = "mbta";
     if (vid && state.departed_ball.includes(vid)) src = "departed Ball Sq";
     else if (vid && state.departed_med.includes(vid)) src = "departed Medford/Tufts";
-    const band = Number(bands[src]);
-    rows.push({eta: t, lo: t - band, hi: t + band,
+    // MBTA's prediction is the anchor, not the answer: measured, the train is
+    // late at every lead. The fitted quantiles sit around it, off centre.
+    const lead = t - now;
+    rows.push({eta: t + model.predOffset(lead, qm),
+               lo: t + model.predOffset(lead, ql),
+               hi: t + model.predOffset(lead, qh),
                source: src, backed: true, vehicle: vid});
   }
 

@@ -22,6 +22,21 @@ DESTINATIONS = {
     "70199": "Park Street", "70159": "Boylston", "70155": "Copley",
 }
 GRID = [round(q, 3) for q in np.arange(0.02, 1.0, 0.02)]
+PAIRS = ROOT / "data" / "pairs"
+# How wrong MBTA's own prediction is, binned by how far ahead it was made.
+#
+# It replaced three literal half-widths -- +/-75 s for "mbta", +/-7 s and +/-33 s
+# for the two departed tiers -- which were eyeballed, symmetric, and the only
+# numbers in the model nothing had measured. Measured over 11,225 paired
+# predictions at Magoun inbound (2026-09-24..25), the error is neither: the train
+# is late at every lead, and the q90 of that lateness runs from 29 s at a
+# one-minute lead to 261 s at ten. One number cannot be right at both ends, and a
+# symmetric one is wrong on the early side at every lead -- which is the side that
+# costs platform wait on every single trip.
+#
+# The last bin stops at 20 min because past that a "prediction" is a mispair, not
+# a long-range prediction (invariant 12 / stats.MAX_LEAD_S).
+PRED_BINS = [(0, 120), (120, 240), (240, 420), (420, 600), (600, 900), (900, 1200)]
 
 
 def _as_script(text: str) -> str:
@@ -44,6 +59,46 @@ def _backend_url() -> str:
             f"data/config.json: backend_url must be a bare origin, got {url!r}. "
             "The board appends /skips and /capture itself.")
     return url
+
+
+def _pred_error() -> dict:
+    """Quantiles of (actual - predicted) for MBTA's own inbound prediction.
+
+    data/pairs is the only store that holds this, and it is the one that is never
+    pruned -- so this is the tier with a long memory, and it grows every night
+    without a refit. Unpaired predictions carry a null actual_arr and are dropped
+    here; they are evidence about no-shows, not about error.
+
+    Loud rather than absent if the history is thin: consumers read `pred` with no
+    fallback, exactly as they read the constants, because a published model.json
+    missing it is a broken deploy and a quiet default would make the board
+    disagree with the tested implementation.
+    """
+    files = sorted(PAIRS.glob("pairs-*.parquet"))
+    if not files:
+        raise SystemExit(
+            f"no {PAIRS}/pairs-*.parquet: rollup.py writes them, and the MBTA "
+            "tier cannot be calibrated without them")
+    df = (pl.concat([pl.read_parquet(f) for f in files])
+          .filter((pl.col("stop") == service.MAGOUN_IN) & (pl.col("dir") == 0)
+                  & pl.col("actual_arr").is_not_null() & (pl.col("lead_s") > 0))
+          # actual - predicted: positive is a train that turned up LATE. rollup
+          # stores err = predicted - actual, which is the sign that printed a late
+          # train as a negative number on the board for a month.
+          .with_columns(late=-pl.col("err_s")))
+    out = {"lead_s": [], "bins": []}
+    for lo, hi in PRED_BINS:
+        x = df.filter(pl.col("lead_s").is_between(lo, hi, closed="left"))["late"]
+        if x.len() < 200:
+            raise SystemExit(
+                f"data/pairs has {x.len()} paired predictions at a {lo}-{hi}s "
+                "lead; that is too few to publish a calibration from")
+        v = np.sort(x.to_numpy().astype(float))
+        out["lead_s"].append((lo + hi) // 2)      # the bin centre, interpolated between
+        out["bins"].append({"n": int(len(v)),
+                            "q": [float(q) for q in np.quantile(v, GRID)]})
+    out["n"] = sum(b["n"] for b in out["bins"])
+    return out
 
 
 def main() -> None:
@@ -74,6 +129,8 @@ def main() -> None:
     model["berth"] = {"n": int(len(delta)),
                       "q": [float(x) for x in np.quantile(delta, GRID)],
                       "turn_plus_run": 357, "sched_bias": 60}
+
+    model["pred"] = _pred_error()
 
     # Ride times Magoun -> each plausible destination, so the notifier can answer
     # "will this train get me there by T" from the bundle alone.
@@ -118,8 +175,6 @@ def main() -> None:
         # no backend: the board loses the strikethrough and the capture age, and
         # is otherwise exactly the board it was before either existed.
         "backend_url": _backend_url(),
-        "band_s": {"mbta": 75, "departed Ball Sq": 7,
-                   "departed Medford/Tufts": 33},
         "stops": {"magoun_in": "70508", "ball_in": "70510",
                   "med_in": "70512", "med_out": "70511"},
         # The board draws the line map and filters alerts from these, so the
@@ -153,6 +208,14 @@ def main() -> None:
     print(f"  {'schedule':10s} n={model['sched']['n']:5d}  "
           f"q10={q[GRID.index(0.1)]:6.0f}s q90={q[GRID.index(0.9)]:6.0f}s  "
           f"band={q[GRID.index(0.9)]-q[GRID.index(0.1)]:5.0f}s")
+    pr = model["pred"]
+    print(f"  mbta prediction error, by how far ahead it was made "
+          f"(n={pr['n']}, + is late):")
+    for lead, b in zip(pr["lead_s"], pr["bins"]):
+        q = b["q"]
+        print(f"    lead {lead:5d}s n={b['n']:5d}  "
+              f"q10={q[GRID.index(0.1)]:+6.0f}s q50={q[GRID.index(0.5)]:+6.0f}s "
+              f"q90={q[GRID.index(0.9)]:+6.0f}s")
 
 
 if __name__ == "__main__":

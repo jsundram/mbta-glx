@@ -364,11 +364,16 @@ Summer/Fall boundary: the two ratings are close (band 364 s vs 295 s, headway 9.
 
 ## Caveats
 
-- The ±75 s band on MBTA-sourced predictions is **provisional**. `validate_live.py`
-  calibrates it from recorded data and needs a few days of `record_rt.py` first.
-  At 9 arrivals the median signed error is negative at every lead bin (−16 s to
-  −39 s, i.e. predicts slightly early — the safe direction), but the p90 at 5–10 min
-  lead is +78 s, so the dangerous tail is real. Not yet enough data to set the band.
+- ~~The ±75 s band on MBTA-sourced predictions is **provisional**.~~ **Fitted
+  2026-09-26** from `data/pairs`: 11,225 paired predictions at Magoun inbound,
+  binned by how far ahead the prediction was made, published as the model's `pred`
+  table. The nine-arrival reading had the sign backwards — the prediction is
+  *optimistic*, not early, at every lead: the train arrives a median 14 s late one
+  minute out and 70 s late at eight, with q10/q90 of lateness at +3/+29 s and
+  −35/+261 s. So the dangerous tail is the one that was guessed at ±75 s, and the
+  early half of that band was padding on a train that does not come early. Quoting
+  it costs what q10 promises: 8.6% missed, against 6.6% when the band was wrong in
+  the rider's favour.
 - The no-show veto is weakly validated: LAMP's terminus records are 38% incomplete,
   so "no train upstream" is often missing data rather than a missing train. The live
   vehicle feed does not have that gap, so the veto should do better than the

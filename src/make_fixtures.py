@@ -84,8 +84,10 @@ def _ghost_case(cases: list, slots: list, model) -> dict:
     Both are boardable-looking and neither is: a NON_REVENUE train runs express,
     and a stale position is a train parked hours ago. Each is placed on the vehicle
     a real MBTA prediction names, so a port that forgets either filter promotes
-    that row from "mbta" (+/-75 s) to "departed Ball Sq" (+/-7 s) -- a 68 s band
-    error on the number the rider acts on.
+    that row from "mbta" to "departed Ball Sq", and -- at the terminus -- satisfies
+    the no-show veto, which is the half that moves a number the rider acts on. (The
+    relabelling used to move one too, when each source carried its own half-width;
+    the band is fitted from the prediction's lead now, so the source is a label.)
     """
     # Prefer a base whose schedule tier is already unbacked: the no-show veto is
     # the other thing a deadhead at the terminus would wrongly satisfy.

@@ -68,6 +68,18 @@ def model_diff(before: dict, after: dict) -> list[str]:
             lines += _band(before, after, before[k], after[k], k)
         elif (k in before) != (k in after):
             lines.append(f"  {k:22s} {'REMOVED' if k in before else 'ADDED'}")
+    # `pred` is a list of {n, q} keyed by lead, not a name -> {n, q} map, so it
+    # needs its own loop. Without one, the tier the rider's leave time is now drawn
+    # from would move at a refit with nothing printed.
+    bp, ap = before.get("pred"), after.get("pred")
+    if bool(bp) != bool(ap):
+        lines.append(f"  {'pred':22s} {'REMOVED' if bp else 'ADDED'}")
+    elif bp and ap:
+        if bp["lead_s"] != ap["lead_s"]:
+            lines.append(f"  pred.lead_s {bp['lead_s']} -> {ap['lead_s']}"
+                         "   (the bins moved; the marks below are not comparable)")
+        for lead, b, a in zip(ap["lead_s"], bp["bins"], ap["bins"]):
+            lines += _band(before, after, b, a, f"pred.lead{lead}s")
     for group in GRID_KEYS:
         b, a = before.get(group, {}), after.get(group, {})
         for name in sorted(set(b) | set(a)):

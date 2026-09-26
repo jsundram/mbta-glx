@@ -93,22 +93,26 @@ def score(walk: int | None = None, band: int | None = None, n: int = 10, paths=N
     against MBTA predictions alone would understate the app, because the schedule
     is what carries the horizon beyond ~13 minutes.
 
-    `band` and `sched_band` are read from the model, not restated. They were
-    hardcoded 75 and 22 -- and 22 was a hand-copied snapshot of
-    model.sched_offset(0.10) == -22.0, which moves at every refit while the literal
-    would not have. This function feeds stats.json's published coverage number, so
-    the staleness would have been invisible and wrong at exactly the moment a rating
-    changed. They stay overridable for experiments.
+    Both thresholds are read from the model, not restated. They were hardcoded 75
+    and 22 -- and 22 was a hand-copied snapshot of model.sched_offset(0.10) ==
+    -22.0, which moves at every refit while the literal would not have. This
+    function feeds stats.json's published coverage number, so the staleness would
+    have been invisible and wrong at exactly the moment a rating changed.
+
+    `band` is an experiment override, and it is the shape this used to have: one
+    symmetric half-width for every lead. Left None -- which is how stats.py calls
+    it -- the MBTA threshold is the fitted q10 of that prediction's own error at
+    its own lead, which is what compute_rows now quotes.
     """
     walk = walk if walk is not None else service.DEFAULT_WALK
-    if band is None or sched_band is None:
-        m = model or _model()
-        if band is None:
-            band = m.const("band_s")["mbta"]
-        if sched_band is None:
-            # The service quotes slot + sched_offset(q10); this is the same number
-            # with the sign the arithmetic below wants.
-            sched_band = -m.sched_offset(0.10)
+    m = model or _model()
+    # Where the q10 arrival is, for a prediction of `a` made at `t`.
+    lo_at = ((lambda a, t: a - band) if band is not None
+             else (lambda a, t: a + m.pred_offset(a - t, 0.10)))
+    if sched_band is None:
+        # The service quotes slot + sched_offset(q10); this is the same number
+        # with the sign the arithmetic below wants.
+        sched_band = -m.sched_offset(0.10)
     paths = paths or (sorted(LIVE.glob("rt-*.jsonl*.gz"))
                       + sorted(LIVE.glob("day=*")))[-2:]
     arrivals: list[tuple[float, str]] = []
@@ -154,7 +158,7 @@ def score(walk: int | None = None, band: int | None = None, n: int = 10, paths=N
         for t, a in stream:
             # The service tells you to leave when the q10 arrival minus the walk
             # has been reached. Replay that rule against what it knew at the time.
-            if t >= (a - band) - walk:
+            if t >= lo_at(a, t) - walk:
                 if fired is None or t < fired[0]:
                     fired, src = (t, a), "mbta"
                 break

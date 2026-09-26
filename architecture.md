@@ -181,8 +181,11 @@ Mitigations, in order of importance:
    lives only in Python so "identical" has one definition. Sensitivity is in M2.
 3. **One source for the constants.** Done: `model.json` now carries a `constants`
    block — `veto_window_s`, `stale_vehicle_s`, `dedupe_s`, `min_gap_s`,
-   `horizon_s`, the per-source `band_s`, and the stop ids. `service.py` reads them
-   from there, so a JS port reads the same file rather than re-typing numbers.
+   `horizon_s` and the stop ids. `service.py` reads them from there, so a JS port
+   reads the same file rather than re-typing numbers. The per-source `band_s` that
+   used to live here is gone: it was three eyeballed symmetric half-widths, and it
+   is now the fitted `pred` table (quantiles of actual-minus-predicted, binned by
+   how far ahead the prediction was made).
 
 If the JS starts growing past arithmetic, that is the signal to fall back to a thin
 backend serving `/status` — less work, gives up the static property.
@@ -244,8 +247,10 @@ as much). Dropping the deadhead filter therefore changed nothing anywhere —
 invariant 7 failing silently in the implementation with no backtest behind it.
 `make_fixtures` now synthesises one case per day with a deadhead and a
 five-minute-stale ghost on the inbound approach, on the vehicles real predictions
-name, so forgetting either filter moves a row from ±75 s to ±7 s and fails. The 26
-pre-existing cases are byte-identical.
+name, so forgetting either filter relabels a row from `mbta` to `departed Ball Sq`
+and — at the terminus — satisfies the no-show veto, and fails. (The relabelling
+used to move a number too, from ±75 s to ±7 s; since the band is fitted from the
+prediction's lead, the source is a label and the veto is the half with teeth.)
 
 **Two things were wrong until measured in a browser:**
 

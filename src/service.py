@@ -113,6 +113,31 @@ class Model:
     def berth_offset(self, q: float) -> float:
         return self._q(self.m["berth"]["q"], q)
 
+    def pred_offset(self, lead: float, q: float) -> float:
+        """How much later than MBTA's own prediction the train actually turns up.
+
+        Fitted (fit.py `pred`), asymmetric, and a function of how far ahead the
+        prediction was made. It replaced three eyeballed symmetric half-widths --
+        +/-75 s, +/-33 s, +/-7 s -- which were the only numbers in the model that
+        nothing had measured. Measured, the train is late at EVERY lead, so the
+        early side of a symmetric band was pure pessimism: 75 s of platform wait
+        per trip that never had to happen.
+
+        Interpolated between bin centres rather than stepped. A step would move
+        the quoted ETA by tens of seconds the moment a train's lead crossed a bin
+        edge, which on the board is indistinguishable from the feed flapping.
+        """
+        p = self.m["pred"]
+        xs, bins = p["lead_s"], p["bins"]
+        if lead <= xs[0]:
+            return self._q(bins[0]["q"], q)
+        if lead >= xs[-1]:
+            return self._q(bins[-1]["q"], q)
+        i = bisect.bisect_right(xs, lead) - 1
+        f = (lead - xs[i]) / (xs[i + 1] - xs[i])
+        a, b = self._q(bins[i]["q"], q), self._q(bins[i + 1]["q"], q)
+        return a + (b - a) * f
+
     @property
     def berth_const(self) -> tuple[int, int]:
         b = self.m["berth"]
@@ -507,8 +532,6 @@ def compute_rows(now: float, preds: list, vehicles: list, model: Model,
     fixtures are what a JS port will be checked against.
     """
     ql, qm, qh = qs
-    bands = model.const("band_s", {"mbta": 75, "departed Ball Sq": 7,
-                                   "departed Medford/Tufts": 33})
     veto = model.const("veto_window_s", VETO_WINDOW)
     dedupe = model.const("dedupe_s", 240)
     min_gap = model.const("min_gap_s", 120)
@@ -531,8 +554,14 @@ def compute_rows(now: float, preds: list, vehicles: list, model: Model,
             src = "departed Ball Sq"
         elif vid and vid in state["departed_med"]:
             src = "departed Medford/Tufts"
-        band = float(bands[src])
-        rows.append({"eta": t, "lo": t - band, "hi": t + band,
+        # MBTA's prediction is the anchor, not the answer. Measured over 11,225
+        # paired predictions here, the train is late at every lead -- by 14 s at
+        # one minute out and 70 s at eight -- so the fitted quantiles sit around
+        # it, off centre, rather than a symmetric guess sitting on top of it.
+        lead = t - now
+        rows.append({"eta": t + model.pred_offset(lead, qm),
+                     "lo": t + model.pred_offset(lead, ql),
+                     "hi": t + model.pred_offset(lead, qh),
                      "source": src, "backed": True, "vehicle": vid})
 
     # 2. Trains already berthed at Medford/Tufts: departure is bounded below by
@@ -609,14 +638,16 @@ def render(rows: list[dict], now: float, walk: int) -> str:
         shown += 1
         eta = dt.datetime.fromtimestamp(r["eta"], TZ)
         mins = (r["eta"] - now) / 60
-        band = (r["hi"] - r["lo"]) / 2
+        # Both sides. No tier is symmetric about its own eta, and one half-width
+        # printed for both invented an early side that the fit does not have.
+        early, late = r["eta"] - r["lo"], r["hi"] - r["eta"]
         flag = "" if r["backed"] else "  [unconfirmed: no train upstream]"
         if r["catchable"]:
             lv = r["leave_in"]
             act = "LEAVE NOW" if lv <= 0 else f"leave in {lv/60:4.1f} min"
         else:
             act = "can't make it"
-        out.append(f"  {eta:%-I:%M} ({mins:4.1f} min)  +/- {band:3.0f}s  "
+        out.append(f"  {eta:%-I:%M} ({mins:4.1f} min)  -{early:3.0f}/+{late:3.0f}s  "
                    f"{act:16s}  via {r['source']}{flag}")
     return "\n".join(out)
 

@@ -152,7 +152,12 @@ and never derives them; `fit.py` and `stats.py` are what write `data/`.
     an older day — and the timetable carries the horizon past ~13 min. Measured on
     2026-09-24: pinned to its own day, 69/74 with 22 arrivals warned by the timetable
     alone; pinned to the wrong day, 60/74 and the tier gone. Pass `day=`.
-11. **Predictions in `data/pairs` past ~20 min are mispairs, not long-range
+11. **`err_s` in `data/pairs` is `predicted - actual`, so a NEGATIVE err is a
+    train that came LATE.** Every consumer has to say which it means: the board
+    printed `p50 -22s` for a train 22 s late for a month, which reads as early.
+    `fit.py` flips it once, into a column called `late`, and everything downstream
+    reads that.
+12. **Predictions in `data/pairs` past ~20 min are mispairs, not long-range
     predictions.** `rollup` pairs each prediction with that vehicle's *next* arrival,
     so a missed `STOPPED_AT` transition attributes it to the following visit: p50 err
     is −414 s at a 20–30 min lead and −2188 s at 30–45 min, against ~620 s worst
@@ -199,6 +204,15 @@ without anyone noticing.
 - **Model as data.** `data/model.json` holds every fitted quantile so consumers do
   lookup and arithmetic, not modelling. This is what keeps a future JS frontend
   from becoming a second implementation.
+- **Nothing quoted is symmetric, because nothing measured is.** `lo`/`hi` are
+  fitted q10/q90 offsets that sit well off centre, and `(hi - lo) / 2` printed as a
+  single `±` invents an early side. The MBTA tier's band was three eyeballed
+  half-widths (±75 s / ±33 s / ±7 s) until 2026-09-26; it is now `model.json`'s
+  `pred` table — quantiles of *actual minus predicted*, binned by how far ahead the
+  prediction was made, interpolated between bin centres so the quoted ETA does not
+  jump as a train's lead crosses an edge. The early half of the old band was 75 s of
+  platform wait per trip on a train that measurably does not arrive early; the
+  catch rate it bought back (2%) is now a quantile choice you can see.
 - **The rider's metric is platform wait, not prediction error** — and platform wait
   alone rewards dawdling, so report door-to-train alongside it.
 - Quote a **low quantile**, not the median: median headway is 8.8 min, so a minute

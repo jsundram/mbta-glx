@@ -117,7 +117,7 @@ def test_fixtures_are_self_contained():
 
 WEB = pathlib.Path(__file__).resolve().parent.parent / "web"
 CONSTANTS = {"veto_window_s", "stale_vehicle_s", "dedupe_s", "min_gap_s",
-             "horizon_s", "band_s", "stops", "glx", "alert_corridor", "walk_s",
+             "horizon_s", "stops", "glx", "alert_corridor", "walk_s",
              "backend_url"}
 
 
@@ -215,7 +215,8 @@ def test_the_scorer_reads_its_bands_from_the_model():
     `sched_band` was a hand-copied 22 -- which is exactly -model.sched_offset(0.10)
     today, and something else after the next refit. A literal there goes stale in a
     published number at precisely the moment a rating changes, with nothing to say
-    so. `band` duplicated constants.band_s.mbta the same way.
+    so. `band` was a hardcoded 75 the same way, and then a published constant that
+    nothing had measured.
     """
     import inspect
 
@@ -224,12 +225,42 @@ def test_the_scorer_reads_its_bands_from_the_model():
     assert sig.parameters["band"].default is None, "band is a literal again"
     assert sig.parameters["sched_band"].default is None, "sched_band is a literal again"
     src = inspect.getsource(replay.score)
-    assert 'const("band_s")' in src and "sched_offset(0.10)" in src, \
+    assert "pred_offset(" in src and "sched_offset(0.10)" in src, \
         "the bands are no longer derived from the model"
 
     m = service.Model()
-    assert m.const("band_s")["mbta"] == 75
-    assert -m.sched_offset(0.10) == 22.0     # the values the literals had, today
+    assert -m.sched_offset(0.10) == 22.0     # the value the literal had, today
+
+
+def test_the_mbta_band_is_fitted_and_asymmetric():
+    """The three half-widths it replaced were the only unmeasured numbers left.
+
+    Properties, not a snapshot of today's quantiles. All three say the same thing
+    about this platform, over 11,225 paired predictions: MBTA's prediction is
+    optimistic at every lead, so a symmetric band spent its early half on a train
+    that does not arrive early -- and `lo` minus the walk is the leave time, which
+    made that half platform wait on every trip.
+    """
+    m = service.Model()
+    leads = m.m["pred"]["lead_s"]
+    assert len(leads) >= 4 and leads == sorted(leads)
+    for lead in leads:
+        lo, mid, hi = (m.pred_offset(lead, q) for q in (0.10, 0.50, 0.90))
+        assert lo <= mid <= hi, f"lead {lead}: quantiles out of order"
+        assert mid > 0, f"lead {lead}: the train is no longer late on average"
+        assert lo > -75, f"lead {lead}: q10 is still further out than the old band"
+        # The window is not centred on MBTA's own number, which is exactly what a
+        # symmetric +/- asserted. At a 5-6 min lead the two halves happen to come
+        # out nearly equal, so it is the centre that carries the property, not the
+        # relative size of the tails.
+        assert (lo + hi) / 2 > 0, f"lead {lead}: the window is centred on the feed"
+    # And it is a function of the lead, not one number wearing six hats.
+    assert m.pred_offset(leads[-1], 0.90) > 2 * m.pred_offset(leads[0], 0.90)
+    # Between bin centres it interpolates rather than stepping: a step moves the
+    # quoted ETA by tens of seconds as a train's lead crosses an edge.
+    a, b = leads[0], leads[1]
+    assert m.pred_offset(a, 0.50) < m.pred_offset((a + b) / 2, 0.50) \
+        < m.pred_offset(b, 0.50)
 
 
 def test_glx_stops_match_the_python_definition():
@@ -303,6 +334,23 @@ def test_javascript_port_matches_python(case, request):
                 assert abs(av - bv) < 1e-6, f"{k}: python {av} != js {bv}"
             else:
                 assert av == bv, f"{k}: python {av!r} != js {bv!r}"
+
+
+@needs_node
+def test_javascript_fails_loudly_without_the_fitted_band():
+    """Same rule as the constants: no silent fallback to a literal.
+
+    Every MBTA-tier row is quoted from `pred` now, so a deploy that dropped it must
+    stop rather than quietly go back to guessing a symmetric 75 s.
+    """
+    stripped = json.loads((service.ROOT / "data" / "model.json").read_text())
+    del stripped["pred"]
+    tmp = pathlib.Path(tempfile.mkdtemp()) / "model.json"
+    tmp.write_text(json.dumps(stripped))
+    out = subprocess.run([_node(), str(NODE_RUNNER), str(tmp), str(FIXTURES[0])],
+                         capture_output=True, text=True, timeout=120)
+    assert out.returncode != 0
+    assert "pred" in out.stderr
 
 
 @needs_node

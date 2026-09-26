@@ -287,8 +287,24 @@ and once `--prune 14` removes the raw archive the corruption is permanent.
 **Acceptance:** the MBTA prediction-error table in `validate_live.py` is stable
 across two consecutive weeks (quantiles move < 20 s week over week).
 
-**Why this gates everything:** the current prediction-error numbers rest on **10
-arrivals**. Every stated `±` on an MBTA-sourced ETA is a placeholder until this closes.
+**Why this gates everything:** the prediction-error numbers rested on **10
+arrivals**, and every stated `±` on an MBTA-sourced ETA was a placeholder until
+they did not.
+
+**Closed 2026-09-26** from `data/pairs`, which is never pruned and grows every
+night: 11,225 paired predictions at Magoun inbound, binned by lead and published as
+the model's `pred` table. The placeholders were ±75 s / ±33 s / ±7 s, symmetric.
+Measured, the prediction is optimistic at *every* lead — the train arrives a median
+14 s late at one minute out and 70 s late at eight — and the spread is one-sided:
+q10/q90 of lateness run +3/+29 s at a one-minute lead and −35/+261 s at ten. So the
+early half of a symmetric band was padding on a train that does not come early, and
+`lo − walk` is the leave time, which made it platform wait on every trip.
+
+Rescored on the two days in the scoreboard, the trade is explicit rather than
+accidental: caught 185/198 → 181/198, mean platform wait 3.7 → 3.6 min. 17 misses
+of 198 is 8.6%, which is what quoting **q10** promises; the old band bought 2% more
+catches by being wrong. The lever is now `QS` in the board and `0.10` in
+`replay.score`, not a mis-fitted constant.
 
 ---
 
@@ -468,9 +484,12 @@ beats abandoning the right one silently.
       is closer than a walk away says so instead, because the host sleeps and a
       leave-now for an unreachable train is worse than the silence it replaces.
 - [x] **Start jogging / ease up** — mid-walk, when the train clears
-      Medford/Tufts (±33 s) or Ball Sq (±7 s). Countdown, not prose. Fires once,
-      only from those two tiers, and only after *On my way* — without that tap
-      there is no reference point and the slack would be invented.
+      Medford/Tufts or Ball Sq. Countdown, not prose. Fires once, only from those
+      two tiers, and only after *On my way* — without that tap there is no
+      reference point and the slack would be invented. (It keys on the tier by
+      name. The ±33 s and ±7 s that used to justify the choice were literals; at
+      those leads the fitted band is +1/+56 s and +3/+29 s, which says the same
+      thing — those two tiers are the sharp ones — having measured it.)
 - [x] **Recovery** — the chosen train no-shows (~9.6% of the time). Split by what
       the feed actually said: a stated skip recovers at once; 240 s of silence
       adopts the best candidate and announces it, because silence is not a
