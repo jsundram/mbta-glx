@@ -306,17 +306,29 @@ def test_no_mbta_key_reaches_the_published_origin_or_the_repo():
         "model.json carries something calling itself an api key; it is public"
 
     import re as _re
+    import subprocess as _sp
+    # Two precise checks rather than one loose one. An MBTA key is 32 hex
+    # characters, and an assignment with a value beside it is the other shape.
+    # A looser `api_key["\'\\s:=]+...` pattern matched `"api_key=" in u` inside
+    # this suite's own browser scenario -- a guard that fails on fixtures is a
+    # guard someone deletes.
     hexkey = _re.compile(r"\b[0-9a-f]{32}\b", _re.I)
-    literal = _re.compile(r"""(api_key|x-api-key)["'\s:=]+["'][^"']{8,}["']""", _re.I)
+    assigned = _re.compile(r"MBTA_API_KEY\s*=\s*\S+")
     offenders = []
-    for f in sorted([*root.glob("web/*"), *root.glob("src/*.py"), *root.glob("src/*.sh"),
-                     *root.glob("ops/*"), *root.glob("*.md")]):
-        if not f.is_file() or f.name == "secrets.env":
+    # git ls-files, not a glob of the working tree: the question is what is IN the
+    # repo. The first version globbed ops/ and flagged the real, gitignored,
+    # never-tracked secrets file -- failing on a key that was being handled
+    # correctly, which is the way to get a guard like this switched off.
+    tracked = _sp.run(["git", "-C", str(root), "ls-files"],
+                      capture_output=True, text=True).stdout.split()
+    assert tracked, "git ls-files returned nothing; this test would pass vacuously"
+    for name in sorted(tracked):
+        f = root / name
+        if not f.is_file():
             continue
         text = f.read_text(errors="ignore")
-        # model.js is model.json wrapped; fixtures carry MBTA trip ids, not keys.
-        for m in hexkey.findall(text) + [m[0] for m in literal.findall(text)]:
-            offenders.append(f"{f.relative_to(root)}: {m[:40]}")
+        for m in hexkey.findall(text) + assigned.findall(text):
+            offenders.append(f"{name}: {m[:44]}")
     assert not offenders, "possible API key committed:\n  " + "\n  ".join(offenders)
 
 
