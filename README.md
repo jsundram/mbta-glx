@@ -2,6 +2,7 @@
 
 > **Roadmap and delivery status: [launch-plan.md](launch-plan.md)**
 > **Working in this repo: [CLAUDE.md](CLAUDE.md)** — invariants that fail silently.
+> **Buildout plan: [architecture.md](architecture.md)** — tiers, contracts, milestones.
 
 The MBTA publishes ~13 predictions for the Medford/Tufts-bound platform at Magoun
 Square but only reaches **8–13 minutes ahead** on the downtown-bound side — not

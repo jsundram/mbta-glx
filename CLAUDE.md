@@ -8,6 +8,8 @@ platform; that gap is the whole project.
 - **[launch-plan.md](launch-plan.md)** — phases, decisions, measured constants,
   known traps. Read before re-deriving anything; most questions are answered there
   with a number.
+- **[architecture.md](architecture.md)** — the buildout: tiers, data contracts,
+  milestones M1–M5. Start here for "what do I build next".
 
 ## Commands
 
