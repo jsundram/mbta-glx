@@ -19,6 +19,10 @@ import service
 
 LIVE = service.ROOT / "data" / "live"
 MAGOUN_IN = "70508"
+# Past this, the rider is not in service hours -- median headway is 8.8 min, so an
+# hour of waiting is an overnight gap, not a bad morning. `stats.py` holds
+# door-to-train to the same bound for the same reason.
+MAX_WAIT_S = 3600
 
 
 def snapshots(day: str) -> Iterator[dict]:
@@ -134,7 +138,7 @@ def run(day: str, strat, walk: int = 390,
     for i0 in range(0, len(snaps), stride):
         for j in range(i0, len(snaps)):
             R = rec[j]
-            if R is None or R > times[j] + 3600:
+            if R is None or R > times[j] + MAX_WAIT_S:
                 continue
             # Fire as soon as the walk would land us at R. Testing `>=` exactly
             # never triggers: the strategy only returns trains that are STILL
@@ -143,7 +147,7 @@ def run(day: str, strat, walk: int = 390,
             if times[j] + walk >= R - 20:
                 platform = times[j] + walk
                 nxt = [a for a in arrivals if a >= platform]
-                if nxt and (nxt[0] - platform) < 3600:
+                if nxt and (nxt[0] - platform) < MAX_WAIT_S:
                     # Platform wait alone rewards dawdling: a strategy that keeps
                     # you at home until it is certain scores perfectly on it while
                     # putting you on a later train. Elapsed time from the moment

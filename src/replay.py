@@ -16,10 +16,21 @@ LIVE = ROOT / "data" / "live"
 SCHED = ROOT / "data" / "sched_full"
 
 
-def _schedule_slots() -> list[float]:
-    """Scheduled inbound arrivals at Magoun, from the daily snapshots."""
+def _schedule_slots(day: str | None = None) -> list[float]:
+    """Scheduled inbound arrivals at Magoun, from the daily snapshots.
+
+    `day` pins the snapshot to the day being scored. Without it this reads the
+    three most recent snapshots, which is fine for "how did this morning go" but
+    silently drops the schedule tier for any older day -- and the schedule is what
+    carries the horizon past ~13 min, so 22 of 74 arrivals on 2026-09-24 were
+    warned by it alone. A scorer that walks a window must pass the day.
+    """
     out: list[float] = []
-    for f in sorted(SCHED.glob("*.json.gz"))[-3:]:
+    files = ([SCHED / f"{day}.json.gz"] if day
+             else sorted(SCHED.glob("*.json.gz"))[-3:])
+    for f in files:
+        if not f.exists():
+            continue
         with gzip.open(f, "rt") as fh:
             for r in json.load(fh):
                 if r.get("stop") == MAGOUN_IN and (r.get("arr") or r.get("dep")):
@@ -47,7 +58,7 @@ def _snapshots(paths):
 
 
 def score(walk: int = 390, band: int = 75, n: int = 10, paths=None,
-          sched_band: int = 22) -> list[dict]:
+          sched_band: int = 22, day: str | None = None) -> list[dict]:
     """Replay the last `n` arrivals as the service would have handled them.
 
     Both sources the service quotes are replayed: MBTA's own prediction where one
@@ -82,7 +93,7 @@ def score(walk: int = 390, band: int = 75, n: int = 10, paths=None,
         windows.append((tA, vid, prev_arr.get(vid, 0.0)))
         prev_arr[vid] = tA
 
-    slots = _schedule_slots()
+    slots = _schedule_slots(day)
     out = []
     for tA, vid, since in windows[-n:]:
         # Two guards, both needed. Window to this visit, and require the
