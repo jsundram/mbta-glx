@@ -523,3 +523,64 @@ def test_the_bell_arms_again_once_that_plan_is_gone(w, feed):
     watch.STATE.unlink()                       # the plan expired, as tick does
     w.on_command(f"arm {int(feed.now + 1200)} G-10199", {})
     assert watch.load()["committed"]["vehicle"] == "G-10199"
+
+
+# --- review: "Track it" committed to a different train than the one it named ---
+
+def test_track_it_commits_the_train_the_message_named(w, feed):
+    """The push names the first CATCHABLE option; the button posts `pick 0`, and
+    options were stored in ETA order. A train too close to walk to sorts first."""
+    walk = 390
+    eta = feed.now + 600
+    arm(feed, eta, vehicle="G-10065", walk=walk)
+    soon = feed.now + 120                       # real, predicted, unreachable
+    good = feed.now + walk + 900
+    feed.rows = [row(eta, vehicle="G-10065", skipped=True),
+                 row(soon, vehicle="G-1"), row(good, vehicle="G-2")]
+    w.tick()
+
+    msg = feed.sent[0]["message"]
+    assert watch.fmt(good) in msg and watch.fmt(soon) not in msg
+    p = watch.load()
+    assert p["options"][0]["eta"] == good, "pick 0 must be what the message offered"
+
+    w.on_command("pick 0", {})
+    assert watch.load()["committed"]["target_eta"] == good
+
+
+def test_a_plan_with_no_deadline_is_not_told_it_missed_one(w, feed):
+    """A board arm has a synthetic deadline of eta + 1800. Quoting it as the
+    rider's deadline describes a commitment they never made."""
+    eta = feed.now + 600
+    w.on_command(f"arm {int(eta)} G-10065", {})
+    feed.rows = []
+    for _ in range(watch.MISS_TICKS):
+        feed.now += watch.TICK
+        w.tick()
+    assert "deadline" not in feed.sent[0]["message"].lower(), feed.sent[0]["message"]
+
+
+def test_a_slow_push_does_not_block_the_tick(w, feed, monkeypatch):
+    """notify.send retries 3x with 20 s timeouts, so an unreachable ntfy takes
+    about a minute. Held under the plan lock, that delays leave-now by as long."""
+    eta = feed.now + 1200
+    arm(feed, eta, vehicle="G-10065")
+    feed.rows = [row(eta, vehicle="G-10065")]
+    sending, release = threading.Event(), threading.Event()
+
+    def slow(*a, **k):
+        sending.set()
+        release.wait(timeout=10)
+        return True
+
+    monkeypatch.setattr(watch.notify, "send", slow)
+    cmd = threading.Thread(target=w.on_command, args=("status", {}))
+    cmd.start()
+    assert sending.wait(timeout=5), "the push never started"
+
+    ticked = threading.Event()
+    threading.Thread(target=lambda: (w.tick(), ticked.set())).start()
+    done = ticked.wait(timeout=5)
+    release.set()
+    cmd.join(timeout=10)
+    assert done, "the tick was stuck behind a push holding the plan lock"

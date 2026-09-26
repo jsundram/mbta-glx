@@ -46,7 +46,16 @@ def load() -> dict:
 
 
 def save(p: dict) -> None:
-    STATE.write_text(json.dumps(p, indent=1))
+    """Write beside and rename, so a reader never sees half a plan.
+
+    `tick` reads this without the lock to decide whether it has anything to do,
+    and a torn read parses as nothing -- which `load` turns into "no plan" and the
+    tick skips. Same reasoning as scores.jsonl: the cheap fix is atomicity, not
+    more locking. os.replace is atomic within a filesystem.
+    """
+    tmp = STATE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(p, indent=1))
+    os.replace(tmp, STATE)
 
 
 def match_target(rows: list[dict], committed: dict, headway: float) -> dict | None:
@@ -101,7 +110,10 @@ class Watcher:
     def __init__(self):
         self.model = service.Model()
         self.berths = service.BerthTracker()
+        # `lock` guards the plan file. `berth_lock` guards the tracker, which is
+        # now touched from both threads because snapshots are taken outside `lock`.
         self.lock = threading.Lock()
+        self.berth_lock = threading.Lock()
 
     # ---- plan lifecycle ----
     def new_plan(self, dest: str, hhmm: str, conf: float = 0.90) -> dict:
@@ -176,10 +188,15 @@ class Watcher:
         return p
 
     def _snapshot(self):
+        """Fetch, then fold into the berth tracker. Deliberately not under `lock`:
+        this is a network round trip and the plan does not need protecting for it."""
         snap = service.snapshot()
-        return snap, self.berths.update(snap)
+        with self.berth_lock:
+            return snap, dict(self.berths.update(snap))
 
     def send_brief(self, p: dict) -> None:
+        """Fetch, render and push. Runs OUTSIDE the plan lock -- it is nearly all
+        network -- and takes it only to record the options it offered."""
         snap, b = self._snapshot()
         if not p.get("dest"):
             return self._send_train_list(p, snap, b)
@@ -192,9 +209,13 @@ class Watcher:
                                        f"pick {i}", clear=True)
                    for i, o in enumerate(pickable)]
         notify.send(title, body, priority=3, tags=["tram"], actions=actions)
-        p["options"] = [{"eta": o["eta"], "p": o["p_ontime"],
-                         "vehicle": o.get("vehicle")} for o in pickable]
-        save(p)
+        with self.lock:
+            p = load()
+            if not p:
+                return
+            p["options"] = [{"eta": o["eta"], "p": o["p_ontime"],
+                             "vehicle": o.get("vehicle")} for o in pickable]
+            save(p)
 
     def _send_train_list(self, p: dict, snap: dict, b: dict) -> None:
         """The brief for a plan armed from the board: trains and leave times.
@@ -215,14 +236,20 @@ class Watcher:
                     tags=["tram"],
                     actions=[notify.reply_action(fmt(o["eta"]), f"pick {i}", clear=True)
                              for i, o in enumerate(opts)])
-        p["options"] = [{"eta": o["eta"], "p": None, "vehicle": o.get("vehicle")}
-                        for o in opts]
-        save(p)
+        with self.lock:
+            p = load()
+            if not p:
+                return
+            p["options"] = [{"eta": o["eta"], "p": None, "vehicle": o.get("vehicle")}
+                            for o in opts]
+            save(p)
 
-    def commit(self, p: dict, idx: int) -> None:
+    def commit(self, p: dict, idx: int):
+        """Point the plan at option `idx`. Returns the push to send once the lock
+        is released -- see on_command."""
         opts = p.get("options") or []
         if not 0 <= idx < len(opts):
-            return
+            return None
         p["committed"] = {"target_eta": opts[idx]["eta"],
                           "original_eta": opts[idx]["eta"],
                           "vehicle": opts[idx].get("vehicle"),
@@ -232,8 +259,10 @@ class Watcher:
         save(p)
         odds = f" (p={opts[idx]['p']:.0%})" if opts[idx].get("p") is not None else ""
         log(f"committed to {fmt(opts[idx]['eta'])}{odds}")
-        notify.send("Locked in", f"Watching the {fmt(opts[idx]['eta'])}. "
-                    f"I'll tell you when to leave.", priority=2, tags=["white_check_mark"])
+        when = fmt(opts[idx]["eta"])
+        return lambda: notify.send(
+            "Locked in", f"Watching the {when}. I'll tell you when to leave.",
+            priority=2, tags=["white_check_mark"])
 
     def _detail(self, p: dict, snap: dict, berths: dict, row: dict) -> dict | None:
         """Live catch / on-time / 95%-there numbers for the committed train.
@@ -254,6 +283,10 @@ class Watcher:
 
     # ---- the tick ----
     def tick(self) -> None:
+        # Cheap unlocked read first: with no plan there is nothing to fetch for.
+        if not load().get("committed"):
+            return
+        snap, b = self._snapshot()          # network, before taking the lock
         with self.lock:
             p = load()
             if not p or not p.get("committed"):
@@ -261,7 +294,6 @@ class Watcher:
             if time.time() > p["deadline"] + 1800:
                 STATE.unlink(missing_ok=True)
                 return
-            snap, b = self._snapshot()
             rows = service.etas(snap, self.model, p["walk"], berths=b)
             com = p["committed"]
             tgt = com["target_eta"]
@@ -440,11 +472,20 @@ class Watcher:
                 priority=5, tags=["warning"],
                 actions=[notify.reply_action("Track it", "pick 0"),
                          notify.reply_action("Show options", "brief")])
+            # The message names `nxt` and the button posts `pick 0`, so the
+            # stored options must START at nxt. They were stored in ETA order,
+            # and the first by ETA is often a train too close to walk to -- so
+            # "Track it" committed to a train the rider could not reach and the
+            # message had not mentioned.
+            ordered = [nxt] + [o for o in opts if o is not nxt]
             p["options"] = [{"eta": o["eta"], "p": o["p_ontime"],
-                             "vehicle": o.get("vehicle")} for o in opts[:3]]
+                             "vehicle": o.get("vehicle")} for o in ordered[:3]]
         else:
+            # A board arm has no deadline -- `deadline` there is a synthetic
+            # eta + 1800 -- so naming one describes a commitment never made.
+            why = ("for your deadline" if p.get("dest") else "you can still walk to")
             notify.send(head or "That train vanished",
-                        "No good option left for your deadline.",
+                        f"No good option left {why}.",
                         priority=5, tags=["warning"])
         log("fired RECOVERY: committed train no longer predicted")
         p["fired"]["recover"] = True
@@ -459,20 +500,36 @@ class Watcher:
         one, and both read-modify-write plan.json. Taking the lock only for the
         load left a window where a tick that started first would save over the tap
         -- "On my way" lost that way costs the mid-walk adjust, which is one of the
-        three things this file exists to send. So the whole handler holds it.
+        three things this file exists to send.
 
         Nothing is allowed to escape, either: an exception here would propagate out
         of notify.watch_commands and kill the subscription thread, and the notifier
         would go on ticking with every button on the phone silently dead.
+
+        The lock covers the plan's read-modify-write and nothing else. `_dispatch`
+        touches no network; anything to push comes back as a callable and is sent
+        after the lock is released, because `notify.send` retries three times with
+        20 s timeouts -- about 64 s with an unreachable ntfy -- and holding the lock
+        through that would delay the leave-now this whole file exists to send.
         """
         log(f"command: {text!r}")
         try:
             with self.lock:
-                self._dispatch(text)
+                after = self._dispatch(text)
         except Exception as e:  # noqa: BLE001
             log(f"  (command {text!r} failed: {type(e).__name__}: {e})")
+            return
+        try:
+            if after:
+                after()
+        except Exception as e:  # noqa: BLE001
+            log(f"  (sending for {text!r} failed: {type(e).__name__}: {e})")
 
-    def _dispatch(self, text: str) -> None:
+    def _dispatch(self, text: str):
+        """Apply `text` to the plan. Returns what to send afterwards, or None.
+
+        Runs under the lock, so nothing here may touch the network.
+        """
         cmd, *rest = text.split() or [""]
         p = load()
         if cmd == "arm" and rest:
@@ -482,14 +539,14 @@ class Watcher:
                 eta = float(rest[0])
             except ValueError:
                 log(f"  (arm: {rest[0]!r} is not an epoch)")
-                return
+                return None
             if eta < time.time():
                 log(f"  (arm: {fmt(eta)} is in the past)")
-                return
+                return None
             vid = rest[1] if len(rest) > 1 and rest[1] != "-" else None
             self.arm_train(eta, vid)
         elif cmd == "pick" and rest and p:
-            self.commit(p, int(rest[0]))
+            return self.commit(p, int(rest[0]))
         elif cmd == "left" and p:
             p["left_at"] = time.time()
             save(p)
@@ -497,18 +554,20 @@ class Watcher:
             cur = p["committed"]["target_eta"] if p.get("committed") else 0
             later = [i for i, o in enumerate(p["options"]) if o["eta"] > cur + 60]
             if later:
-                self.commit(p, later[0])
+                return self.commit(p, later[0])
         elif cmd == "cancel":
             STATE.unlink(missing_ok=True)
-            notify.send("Cancelled", "Not watching anything.", priority=2)
+            return lambda: notify.send("Cancelled", "Not watching anything.",
+                                       priority=2)
         elif cmd == "brief" and p:
-            self.send_brief(p)
+            return lambda: self.send_brief(p)
         elif cmd == "status":
-            notify.send("Status", json.dumps(p, indent=1)[:900] if p else "no plan",
-                        priority=2)
+            body = json.dumps(p, indent=1)[:900] if p else "no plan"
+            return lambda: notify.send("Status", body, priority=2)
         else:
             log(f"  (no handler for {cmd!r}"
                 f"{'; no plan active' if not p else ''})")
+        return None
 
 
 def main() -> None:
