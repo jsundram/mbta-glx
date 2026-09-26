@@ -419,6 +419,46 @@ Start with (2), since committing to a train is already the interaction.
 
 ---
 
+## Replay harness: strategies as experiments
+
+`src/simulate.py` replays an archived day and scores competing strategies against
+it. The archive samples everything every 15 s, so any instant can be reconstructed
+exactly; a whole day against six strategies runs in **seconds**, not mornings.
+
+First run, 2026-09-25, 6.5-minute walk, riders deciding every 5 minutes:
+
+| strategy | platform wait (mean/median) | >5 min | door-to-train (mean/median) |
+|---|---|---|---|
+| MBTA only, q10 | 3.79 / 3.03 min | 29% | 44.4 / 16.6 min |
+| schedule only, q10\* | 7.42 / 7.29 min | 75% | 102.4 / 74.5 min |
+| both, q05 | 4.31 / 3.54 min | 36% | 43.8 / 16.1 min |
+| **both, q10** | 4.14 / 3.04 min | 33% | 43.9 / 16.1 min |
+| both, q20 | 4.07 / 3.04 min | 33% | 43.7 / 16.1 min |
+| both, q35 | 4.14 / 3.04 min | 34% | 44.0 / 16.1 min |
+
+**The quantile barely matters.** Everything from q05 to q35 lands within 0.3 min of
+everything else. We have spent a lot of this project reasoning about where on the
+arrival distribution to aim; on this evidence that is not the lever. Adding the
+schedule tier buys a slightly earlier train (door-to-train 16.06 vs 16.57 median)
+at the cost of slightly more platform time — the trade we designed for, now
+measured rather than argued.
+
+**The harness also exposed a flaw in the metric used all along.** Platform wait
+alone *rewards dawdling*: a strategy that keeps you at home until it is certain
+scores beautifully on it while putting you on a later train. `door-to-train`
+(decision → boarding) is the honest measure and is now reported alongside.
+
+\* Not a clean ablation: the tier filter runs on `etas()` output, which has already
+fused and de-duplicated tiers, so an MBTA row suppresses a nearby schedule row.
+"Schedule only" here means "schedule rows that survived fusion", which is why it
+looks worse than a true schedule-only strategy would.
+
+**Caveats:** one day, one walk time, and mean door-to-train is inflated by riders
+who decide at 3am — the medians are the meaningful figures.
+
+- [ ] Run across many days once the works period ends and Phase 1 has clean data.
+- [ ] Build a true tier ablation that bypasses fusion.
+
 ## Self-scoring: the last 10 trains
 
 `src/replay.py` replays the recorded prediction stream against observed arrivals and

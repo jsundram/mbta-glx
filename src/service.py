@@ -259,8 +259,17 @@ def schedule_today(day: dt.date) -> list[float]:
     return sorted(t for t in (_iso(r["arr"] or r["dep"]) for r in rows) if t)
 
 
+_SCHED_ROWS: dict = {}
+
+
 def schedule_rows(day: dt.date) -> list[tuple[float, str]]:
-    """(scheduled arrival, trip_id) so a slot can be matched against skips."""
+    """(scheduled arrival, trip_id) so a slot can be matched against skips.
+
+    Memoised: the replay harness calls etas() thousands of times a day and the
+    file read dominated everything else.
+    """
+    if day in _SCHED_ROWS:
+        return _SCHED_ROWS[day]
     cache = ROOT / "data" / "sched" / f"{day}.json"
     if not cache.exists():
         schedule_today(day)
@@ -269,7 +278,9 @@ def schedule_rows(day: dt.date) -> list[tuple[float, str]]:
     except Exception:  # noqa: BLE001
         return []
     out = [(_iso(r.get("arr") or r.get("dep")), r.get("trip")) for r in rows]
-    return sorted((t, tr) for t, tr in out if t)
+    res = sorted((t, tr) for t, tr in out if t)
+    _SCHED_ROWS[day] = res
+    return res
 
 
 _ALERT_CACHE: dict = {"t": 0.0, "data": []}
@@ -451,9 +462,9 @@ def etas(snap: dict, model: Model, walk: int = DEFAULT_WALK,
     #    what fixes the case where a train is running behind schedule.
     day = dt.datetime.fromtimestamp(now, TZ).date()
     skip = skipped_trips()
-    slot_rows = [(t, tr) for t, tr in schedule_rows(day) if tr not in skip]
-    slots = [t for t, _ in slot_rows]
-    dropped = [t for t, tr in schedule_rows(day) if tr in skip and t > now]
+    all_rows = schedule_rows(day)
+    slots = [t for t, tr in all_rows if tr not in skip]
+    dropped = [t for t, tr in all_rows if tr in skip and t > now]
     turn_run, bias = model.berth_const
     covered = {r.get("vehicle") for r in rows}
     for vid, berth in berths.items():
