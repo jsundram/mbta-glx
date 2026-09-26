@@ -327,7 +327,7 @@ def test_arm_refuses_what_is_not_a_future_epoch(w, feed):
 def test_the_board_hands_off_on_the_command_topic_it_already_listens_to(w):
     """No new endpoint and no widened CORS: the reply path M2 already built."""
     board = (pathlib.Path(__file__).resolve().parent.parent
-             / "web" / "board.html").read_text()
+             / "web" / "index.html").read_text()
     assert "magoun.cmd" in board, "the bell must know the command topic"
     assert "body: `arm ${eta} ${veh}`" in board
     # The handoff names the ARMED train, read back from storage -- not data.next,

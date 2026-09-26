@@ -722,7 +722,7 @@ The alternative — a thin backend serving `/status`, frontend stays dumb — is
 work today and gives up the static property the rider asked for. Not recommended,
 but it is the fallback if the JS port starts growing.
 
-- [x] **Port the tier selection to JS.** `web/app.js` + `web/board.html`: lookup and
+- [x] **Port the tier selection to JS.** `web/app.js` + `web/index.html`: lookup and
       arithmetic only, every constant read from `model.json`, and a missing constant
       throws instead of falling back to a literal. Verified in a browser from
       `file://` with the Mac server stopped — which turned up that a page opened off

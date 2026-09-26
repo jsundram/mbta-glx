@@ -1,4 +1,4 @@
-"""Drive web/board.html in a real browser: from file://, and over HTTP.
+"""Drive web/index.html in a real browser: from file://, and over HTTP.
 
 The contract test proves the JS computes the same rows as Python. It says nothing
 about whether the page loads at all, and three things here were wrong until
@@ -30,9 +30,9 @@ import sys
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-BOARD = "file://" + str(ROOT / "web" / "board.html")
+BOARD = "file://" + str(ROOT / "web" / "index.html")
 WALK_S = 390
-REARM_WAIT_S = 75        # board.html reconsiders the alert every 60 s
+REARM_WAIT_S = 75        # index.html reconsiders the alert every 60 s
 ISO_KEYS = ("arrival_time", "departure_time", "updated_at")
 
 
@@ -354,7 +354,9 @@ def served_scenario(browser, check) -> None:
         page = browser.new_page()
         stub(page, live)
         page.route(re.compile(r"ntfy\.sh"), lambda r: r.fulfill(status=200, json={}))
-        page.goto(f"http://127.0.0.1:{port}/board.html")
+        # The directory root, not the filename: the whole point of the rename is
+        # that https://<pages>/mbta-glx/ serves the board.
+        page.goto(f"http://127.0.0.1:{port}/")
         page.wait_for_timeout(5000)
 
         print(f"\n  serving web/ over HTTP on {port} (the deployed shape)")

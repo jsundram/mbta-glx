@@ -131,7 +131,7 @@ def test_the_suite_workflow_has_a_weekly_drift_run():
 
 
 def test_pages_deploys_the_web_directory_itself():
-    """web/ is the origin. A second copy of board.html is a copy that can drift."""
+    """web/ is the origin. A second copy of index.html is a copy that can drift."""
     s = _steps("pages.yml")
     assert "upload-pages-artifact" in s
     assert "path: web" in s
@@ -206,6 +206,6 @@ def test_the_published_artifacts_really_are_in_the_repo():
     import subprocess
     tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files"],
                              capture_output=True, text=True, check=True).stdout.split()
-    for f in ("web/board.html", "web/app.js", "web/model.json", "web/model.js",
+    for f in ("web/index.html", "web/app.js", "web/model.json", "web/model.js",
               "data/model.json"):
         assert f in tracked, f"{f} is not committed; Pages would deploy without it"

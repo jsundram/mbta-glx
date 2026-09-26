@@ -13,7 +13,7 @@ shape of the system and the order of work.
 
 ```
 ┌─ STATIC (GitHub Pages: web/ uploaded as-is) ────────── £0 ─┐
-│  board.html + app.js                                       │
+│  index.html + app.js                                       │
 │    ├─ fetch  api-v3.mbta.com          live, CORS, no key   │
 │    ├─ fetch  model.json               fitted quantiles     │
 │    ├─ <script> model.js               same bytes, file://  │
@@ -131,11 +131,11 @@ point of `BROWSER_ROUTES` is that there is never a second thing.
   "by_lead": [{"bin": "5-10min", "n": 104, "p10": -61, "p50": -39, "p90": 78}] }
 ```
 
-`web/board.html` reads these field names directly and hides its panel when the file
+`web/index.html` reads these field names directly and hides its panel when the file
 is absent or unparseable — so a missing `stats.json` degrades quietly, but a
 *renamed* field shows an empty panel instead of failing. Keep the names.
 `tests/test_stats.py` pins them from both sides, reading the names out of
-board.html itself rather than a list typed twice.
+index.html itself rather than a list typed twice.
 
 Where each field comes from, since they are not the same question (M3):
 
@@ -217,7 +217,7 @@ because skips are too rare to catch by sampling.
 
 ### M2 — Static board *(the tablet dashboard becomes real)* — **done**
 
-`web/board.html` + `web/app.js` run with no backend: `src/status.html` with its
+`web/index.html` + `web/app.js` run with no backend: `src/status.html` with its
 data source swapped, a 43-line diff. `app.js` is the port of `compute_rows`,
 `upstream_state`, `_live`, `_revenue`, `BerthTracker` and `ArrivalTracker`, plus
 the I/O that gathers what the pure function needs. Every constant is read from
@@ -268,7 +268,7 @@ fixture. All three verified.
 ### M3 — Publish pipeline — **done**
 
 **The static origin is `web/` in this repo.** `pages.yml` uploads that directory to
-Pages as-is, so board.html and app.js have no second copy to fall behind and there
+Pages as-is, so index.html and app.js have no second copy to fall behind and there
 is no `docs/`. `publish.py --check` runs before the upload and fails the deploy on
 an incomplete origin.
 
@@ -278,7 +278,7 @@ manifest, each derived entry naming the file under `data/` it must equal:
 
 | published | must equal | why |
 |---|---|---|
-| `board.html`, `app.js` | — | authored in `web/`, which *is* the origin |
+| `index.html`, `app.js` | — | authored in `web/`, which *is* the origin |
 | `model.json` | `data/model.json` | fitted quantiles, fetched |
 | `model.js` | `data/model.json`, script-wrapped | a `file://` board cannot fetch a sibling file at all |
 | `stats.json` | `data/stats.json` | the self-score |

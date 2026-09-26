@@ -21,9 +21,14 @@ exercised and which never got the chance -- "not observed" is coverage missing,
 not a failure, and reporting it as green would be the same lie as a skipped test
 that looks passing (invariant 9).
 
-    uv run --with numpy python tests/live_notifier.py                 # 25 min
-    uv run --with numpy python tests/live_notifier.py --minutes 40
-    uv run --with numpy python tests/live_notifier.py --real-topics   # buzzes the phone
+    R="uv run --with numpy --with gtfs-realtime-bindings python"
+    $R tests/live_notifier.py                 # 25 min
+    $R tests/live_notifier.py --minutes 40
+    $R tests/live_notifier.py --real-topics   # buzzes the phone
+
+gtfs-realtime-bindings is not optional here either: without it the skip lookup
+raises and is swallowed, so a run reports "no skips" whether or not there were
+any -- and the skip path is one of the two this check exists to exercise.
 
 SAFETY, because this talks to the outside world and to a host that may be
 running the real notifier:
@@ -134,7 +139,7 @@ def main() -> int:
     time.sleep(3)                    # let the subscription attach before arming
 
     def post(body: str) -> None:
-        """Exactly what web/board.html posts: a command on the command topic."""
+        """Exactly what web/index.html posts: a command on the command topic."""
         urllib.request.urlopen(urllib.request.Request(
             f"https://ntfy.sh/{cmd}", data=body.encode(),
             headers={"Priority": "min", "Title": "cmd"}), timeout=20).read()

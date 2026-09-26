@@ -51,8 +51,10 @@ cover — a green suite is not evidence about either.
 # the board in a real browser: file:// and over HTTP, ~90 s
 PLAYWRIGHT_BROWSERS_PATH=~/.cache/ms-playwright \
   uv run --with playwright==1.61.0 python tests/board_smoke.py
-# the notifier against the live feed and a real ntfy round trip, ~25 min
-uv run --with numpy python tests/live_notifier.py
+# the notifier against the live feed and a real ntfy round trip, ~25 min.
+# gtfs-realtime-bindings or the skip path is invisible and the run says so as
+# "no skips" -- see the launcher test in tests/test_server.py.
+uv run --with numpy --with gtfs-realtime-bindings python tests/live_notifier.py
 ```
 
 - **`board_smoke.py`** after any change to `web/` — a `file://` board cannot fetch
@@ -179,7 +181,7 @@ without anyone noticing.
   **app** to collapse or dismiss a notification in the tray, not server-side
   scheduling — which is why from a phone it looks exactly like "reschedule delivers
   exactly once", and was written down that way. So a scheduled alert cannot be
-  refined from a page at all: `web/board.html` and `src/status.html` arm **once**,
+  refined from a page at all: `web/index.html` and `src/status.html` arm **once**,
   as the fallback for a notifier that is not running, and refinement belongs to
   `watch.py` — which is what the `arm` handoff on the command topic is for.
 - MBTA predictions **flap ~8 min for ~90 s**. Debounce longer than the flap, and

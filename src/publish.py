@@ -1,7 +1,7 @@
 """Move the published artifacts to the static origin, and refuse to move a partial set.
 
 The origin is `web/` in this repo: a GitHub Actions workflow uploads that directory
-to Pages as-is, so there is no second copy of board.html or app.js to fall behind.
+to Pages as-is, so there is no second copy of index.html or app.js to fall behind.
 What can still fall behind is the derived half of the directory, and that is the
 failure this file exists to prevent.
 
@@ -87,7 +87,7 @@ class Artifact:
 # The published set, in the order the board needs it. Adding a file the board
 # fetches without adding it here is how an origin goes out incomplete.
 MANIFEST = [
-    Artifact("board.html", why="the board"),
+    Artifact("index.html", why="the board"),
     Artifact("app.js", why="the port of compute_rows"),
     Artifact("model.json", DATA / "model.json", why="fitted quantiles, fetched"),
     Artifact("model.js", DATA / "model.json", script=True,

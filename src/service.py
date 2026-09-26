@@ -17,6 +17,7 @@ import datetime as dt
 import json
 import os
 import pathlib
+import sys
 import time
 import urllib.parse
 import urllib.request
@@ -259,7 +260,18 @@ def skipped_trips(stop: str = MAGOUN_IN, ttl: float = 30.0) -> set[str]:
     if now - _SKIP_CACHE["fail_t"] < SKIP_FAIL_BACKOFF:
         return _SKIP_CACHE["trips"]
     try:
-        from google.transit import gtfs_realtime_pb2 as pb
+        try:
+            from google.transit import gtfs_realtime_pb2 as pb
+        except ImportError:
+            # Not a bad day upstream -- a launcher missing a dependency, which
+            # never fixes itself. Say so once rather than returning an empty set
+            # forever, which is what `watch.sh` did from the day it was written.
+            if not _SKIP_CACHE.get("warned"):
+                _SKIP_CACHE["warned"] = True
+                print("skipped_trips: gtfs-realtime-bindings is not installed; "
+                      "SKIPPED/CANCELED markers are invisible to this process",
+                      file=sys.stderr, flush=True)
+            raise
         with urllib.request.urlopen(
                 "https://cdn.mbta.com/realtime/TripUpdates.pb", timeout=20) as r:
             msg = pb.FeedMessage()

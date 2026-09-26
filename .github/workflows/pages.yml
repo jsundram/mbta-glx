@@ -1,6 +1,6 @@
 # Serve web/ as the static origin.
 #
-# web/ is uploaded as-is, so there is no docs/ copy of board.html or app.js to fall
+# web/ is uploaded as-is, so there is no docs/ copy of index.html or app.js to fall
 # behind. The artifacts it serves -- model.json, model.js, stats.json -- are written
 # by fit.py and stats.py on the capture host and committed from there; this only
 # deploys what is in the commit.

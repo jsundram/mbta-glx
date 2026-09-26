@@ -16,7 +16,7 @@ uv run --with polars --with gtfs-realtime-bindings python src/server.py 8723
 #   http://localhost:8723/board       live status board, self-updating
 #   http://localhost:8723/?walk=6     ETAs with leave-by times
 uv run python src/service.py 6                   # one-shot CLI, 6-minute walk
-open web/board.html                              # the same board, no server at all
+open web/index.html                              # the same board, no server at all
 ```
 
 Publishing it, on the host that holds the archive:
@@ -29,7 +29,7 @@ uv run python src/publish.py --commit            # commit what moved; never push
 ```
 
 `web/` **is** the static origin: a GitHub Actions workflow uploads it to Pages as-is,
-so there is no second copy of `board.html` to fall behind, and `publish.py --check`
+so there is no second copy of `index.html` to fall behind, and `publish.py --check`
 fails the deploy if any published artifact is stale or missing. `publish.py` moves
 files; `fit.py` and `stats.py` are what write them.
 
@@ -282,7 +282,7 @@ the 90-day prune of the archive it was computed from.
 | `src/backtest_berth.py` | where the berth tier's numbers came from; run by hand |
 | `src/validate_live.py` | calibrate prediction error vs. lead time |
 | `src/service.py`, `src/server.py`, `src/ui.html` | the live service |
-| `web/board.html`, `web/app.js` | the same board with no backend; `app.js` ports `compute_rows` |
+| `web/index.html`, `web/app.js` | the same board with no backend; `app.js` ports `compute_rows` |
 | `tests/run_cases.js`, `tests/board_smoke.py` | the JS side of the contract test; a browser check of the board |
 
 ## Historical feed archive: what exists

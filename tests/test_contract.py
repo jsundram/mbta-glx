@@ -201,7 +201,7 @@ def test_no_module_retypes_the_walk():
 
 def test_the_board_does_not_retype_the_walk():
     walk = json.loads((WEB / "model.json").read_text())["constants"]["walk_s"]
-    for name in ("app.js", "board.html"):
+    for name in ("app.js", "index.html"):
         src = (WEB / name).read_text()
         assert not re.search(rf"\b{walk}\b", src), \
             f"web/{name} hardcodes a default walk"

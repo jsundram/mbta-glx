@@ -54,7 +54,7 @@ def test_the_manifest_covers_every_asset_the_board_asks_for():
     in model.json's constants, so it is another origin's problem and the filter
     below drops it. tests/test_regressions.py is what polices that host.
     """
-    src = (WEB / "board.html").read_text() + (WEB / "app.js").read_text()
+    src = (WEB / "index.html").read_text() + (WEB / "app.js").read_text()
     asked = set(re.findall(r'fetch\("([\w.-]+)"', src))
     asked |= set(re.findall(r'\.src = "([\w.-]+)"', src))
     # Absolute URLs are other people's origins (api-v3.mbta.com, ntfy.sh).
@@ -65,7 +65,7 @@ def test_the_manifest_covers_every_asset_the_board_asks_for():
 
 def test_the_board_itself_is_published():
     """web/ is the origin, so the page and its port are part of the set."""
-    assert {"board.html", "app.js"} <= {a.name for a in publish.MANIFEST}
+    assert {"index.html", "app.js"} <= {a.name for a in publish.MANIFEST}
 
 
 def test_every_derived_artifact_names_how_to_rebuild_it():
@@ -95,7 +95,7 @@ def test_a_stale_stats_json_is_caught(origin):
     assert [a.name for a, _ in publish.check()] == ["stats.json"]
 
 
-@pytest.mark.parametrize("name", ["board.html", "app.js", "model.json", "model.js",
+@pytest.mark.parametrize("name", ["index.html", "app.js", "model.json", "model.js",
                                   "stats.json"])
 def test_a_missing_artifact_is_caught(origin, name):
     (origin / name).unlink()

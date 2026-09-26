@@ -246,3 +246,45 @@ def test_the_stale_threshold_is_far_above_the_archivers_own_cadence():
     assert server.CAPTURE_STALE_S >= 300, (
         f"{server.CAPTURE_STALE_S}s is close enough to the 15 s write cadence to "
         "fire on ordinary jitter")
+
+
+# --- the launcher that could not see a skip, and said nothing about it ---
+
+PROTOBUF_DEP = "gtfs-realtime-bindings"
+NEEDS_PROTOBUF = ("src/watch.py", "src/server.py", "tests/live_notifier.py")
+
+
+def _commands(path: pathlib.Path):
+    """Logical command lines: shell continuations joined, a plist taken whole."""
+    text = path.read_text()
+    if path.suffix == ".plist":
+        return [" ".join(text.split())]
+    return text.replace("\\\n", " ").splitlines()
+
+
+def test_every_launcher_of_the_skip_path_installs_the_protobuf_library():
+    """service.skipped_trips imports google.transit INSIDE its try, so a launcher
+    without the dependency does not crash -- every lookup raises and is swallowed
+    as though cdn.mbta.com were down. The process then reports no skips forever.
+
+    src/watch.sh shipped that way from the day it was written: the notifier could
+    not see a SKIPPED marker, never took its act-at-once branch, and would have
+    waited out the full 240 s debounce on a train MBTA had already said was not
+    stopping. Nothing failed, so nothing said so.
+    """
+    root = pathlib.Path(__file__).resolve().parent.parent
+    checked, offenders = 0, []
+    for path in sorted([*root.glob("src/*.sh"), *root.glob("ops/*.plist"),
+                        *root.glob("*.md"), root / "tests" / "live_notifier.py"]):
+        for line in _commands(path):
+            if not any(t in line for t in NEEDS_PROTOBUF):
+                continue
+            if "uv run" not in line and path.suffix != ".plist":
+                continue          # prose mentioning the file, not launching it
+            checked += 1
+            if PROTOBUF_DEP not in line:
+                offenders.append(f"{path.relative_to(root)}: {line.strip()[:90]}")
+    assert checked, "found no launchers at all; this test would pass vacuously"
+    assert not offenders, (
+        f"these launch code that reads the skip set without {PROTOBUF_DEP}, so it "
+        "will silently report no skips:\n  " + "\n  ".join(offenders))

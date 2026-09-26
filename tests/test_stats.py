@@ -2,7 +2,7 @@
 
 The panel degrades quietly by design -- `history()` hides it on any throw -- so a
 renamed field does not fail, it shows an empty box. That is the failure this file
-exists to catch, from both sides: every name board.html reads has to be in the
+exists to catch, from both sides: every name index.html reads has to be in the
 published file, and the file has to carry nothing less than the contract.
 """
 import json
@@ -19,7 +19,7 @@ import stats  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
-BOARD = WEB / "board.html"
+BOARD = WEB / "index.html"
 
 # architecture.md 2, the published contract. Extra keys are fine (invariant 5:
 # schema changes are additive); missing ones are not.
@@ -29,7 +29,7 @@ BIN_CONTRACT = {"bin", "n", "p10", "p50", "p90"}
 
 
 def _history_source() -> str:
-    """The body of board.html's history(), which is the only reader of stats.json."""
+    """The body of index.html's history(), which is the only reader of stats.json."""
     src = BOARD.read_text()
     i = src.index("async function history()")
     # The function is at top level, so the first line-initial "}" closes it.
@@ -49,13 +49,13 @@ def test_board_reads_stats_json_by_fetch():
 def test_every_field_the_board_reads_is_published():
     """The two-sided pin: rename a field on either side and this fails.
 
-    Keyed off board.html itself rather than a list typed twice, so the test cannot
+    Keyed off index.html itself rather than a list typed twice, so the test cannot
     agree with a stale copy of the contract.
     """
     want = _fields_read("d")
     assert len(want) >= 7, f"failed to parse history(); got only {want}"
     got = set(json.loads((WEB / "stats.json").read_text()))
-    assert want <= got, f"board.html reads fields stats.json does not have: {sorted(want - got)}"
+    assert want <= got, f"index.html reads fields stats.json does not have: {sorted(want - got)}"
 
 
 def test_every_bin_field_the_board_reads_is_published():

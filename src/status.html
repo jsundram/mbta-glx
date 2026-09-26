@@ -166,7 +166,7 @@ let data = null, lastOk = 0, version = null, dueLatch = null;
 // publishes a message_delete event while the scheduled send still arrives. Both
 // are the ntfy app collapsing or dismissing a notification, not the server
 // rescheduling. So a scheduled alert cannot be refined from a page: this arms
-// exactly once, and refining it is watch.py's job (see web/board.html, which
+// exactly once, and refining it is watch.py's job (see web/index.html, which
 // hands the train over on the command topic; this page is the server-rendered
 // original and has no handoff).
 const NTFY = localStorage.getItem("magoun.ntfy") || "";
