@@ -52,6 +52,10 @@ if [ -n "$base" ]; then
     [ "$code" = 200 ] && ok "$base$p" || bad "$base$p -> HTTP $code (tailscale serve?)"
   done
   # The line that keeps the board static: only the allowlisted ones may be reachable.
+  # These 404 because `/` on this hostname is mounted to another app (port 8770)
+  # and that app does not have them -- not because Tailscale refuses an unmapped
+  # path. Same verdict, different reason: if that app ever grew a /status, this
+  # would go BAD without the board's backend having leaked anything.
   for p in $private; do
     code=$(curl -s -o /dev/null --max-time 10 -w '%{http_code}' "$base$p")
     [ "$code" = 404 ] && ok "$base$p is NOT exposed" \

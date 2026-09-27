@@ -58,9 +58,10 @@ that is the only way the rider's phone reaches the backend.
 | `com.magoun.watch` | `watch.sh` → the notifier | yes — no push, no error |
 | `com.magoun.daily` | `daily.sh`, scheduled | no — it leaves a log |
 
-`tailscale serve` publishes exactly the paths `BROWSER_ROUTES` allows, so the proxy
-enforces the same line. Set once, survives reboot, lost if Tailscale is reinstalled
-or `tailscale serve --https=443 off` is run:
+`tailscale serve` maps **one path at a time**, so each allowlisted route needs its
+own line and the proxy ends up enforcing the same line `BROWSER_ROUTES` does. Set
+once, survives reboot, lost if Tailscale is reinstalled or
+`tailscale serve --https=443 off` is run:
 
 ```bash
 tailscale serve --bg --https 443 --set-path /skips   http://127.0.0.1:8723/skips
@@ -70,7 +71,11 @@ tailscale serve --bg --https 443 --set-path /today   http://127.0.0.1:8723/today
 
 `/skips` and `/capture` are verified live: 200 with `access-control-allow-origin: *`
 through the proxy, while `/api`, `/status`, `/board` and `/history` answer **404**
-there. `/today` is verified on **loopback** — 200, `access-control-allow-origin: *`,
+there — but note *why*: `/` on this hostname is mounted to **port 8770, which is a
+different application** (Deck), so an unmapped path is not refused, it is answered
+by that app. A route with no `--set-path` line therefore 404s from somewhere else
+entirely, which looks identical to a backend that is down. `/today` is verified on
+**loopback** — 200, `access-control-allow-origin: *`,
 48 trains scored, 19 ms for a cached hit — but its proxy path is **not set yet**, so
 it is unreachable from the phone until that third line is run and
 `com.magoun.server` is restarted onto the code that serves it. Until then the board
