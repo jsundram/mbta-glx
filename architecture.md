@@ -17,9 +17,10 @@ shape of the system and the order of work.
 │    ├─ fetch  api-v3.mbta.com          live, CORS, no key   │
 │    ├─ fetch  model.json               fitted quantiles     │
 │    ├─ <script> model.js               same bytes, file://  │
-│    ├─ fetch  stats.json               how it has been doing│
+│    ├─ fetch  icon-180.png             the home-screen icon  │
 │    ├─ fetch  <backend_url>/skips      skips (no CORS path) │
 │    ├─ fetch  <backend_url>/capture    is the archiver alive? │
+│    ├─ fetch  <backend_url>/today      how trains ran today  │
 │    └─ POST   ntfy.sh                  arm its own alerts   │
 └────────────────────────────────────────────────────────────┘
         ▲ published artifacts              ▲ scheduled push
@@ -27,9 +28,10 @@ shape of the system and the order of work.
 │  record_rt.py   continuous capture  → data/live/       │   │
 │  rollup.py      distil + compact    → data/pairs/      │   │
 │  fit.py         refit per rating    → model.json       │   │
-│  stats.py       score closed days   → stats.json       │   │
+│  stats.py       score closed days   → data/stats.json  │   │
 │  publish.py     move artifacts to the static origin    │   │
-│  server.py /skips  the skip set, parsed from protobuf  │   │
+│  server.py      /skips /capture /today -- the three     │   │
+│                 things a browser cannot get for itself │   │
 │  watch.py       refine alerts, brief, recovery  ───────────┘
 └────────────────────────────────────────────────────────┘
 ```
@@ -122,7 +124,44 @@ ids for one stop, so the parse happens here. And it is named for the one thing i
 serves rather than "extras": a bag invites a second thing in it, and the whole
 point of `BROWSER_ROUTES` is that there is never a second thing.
 
-### `stats.json` — self-scoring, published daily
+### `/today` — how trains have actually run today
+
+```jsonc
+{ "day": "2026-09-27", "as_of": 1790531972, "ttl_s": 60, "walk_s": 390,
+  "close_s": 120, "min_trains": 3, "gap_s": 0, "max_gap_s": 0,
+  "trains": 47, "early": 13, "close": 23, "late": 11,
+  "caught": 21, "median_wait_s": 147 }
+```
+
+The panel a rider reads. It replaced a table of MBTA prediction-error quantiles
+binned by lead time, which is a question for whoever is fitting the model — someone
+standing on a platform is asking whether the times on this screen have been holding
+up **today**.
+
+Today cannot come from a published file. `stats.json` is written from *closed* days,
+and the board is served from Pages, so nothing computed on the Mac during the day
+could ever reach it. Scoring today needs today's whole prediction stream and today's
+arrivals, which is the archive — so it is the third thing the backend serves, for
+the same reason as the first two, and it is aggregates only: counts and a median,
+never rows, so the board still computes every ETA it displays.
+
+Three properties it has to keep:
+
+- **Scored at the moment the rider acts.** `predicted` is the ETA that was on screen
+  when leave-now fired, not MBTA's last word thirty seconds out — which is always
+  accurate and never useful. So "early" is the train that beat the time you were
+  quoted, which is the one you watch leave.
+- **It never scores on the request path.** The server is single-threaded and the
+  board fetches `/skips` in the same tick behind a 2.5 s timeout. A pass costs ~0.6 s
+  on a full day and the gzip is not seekable, so the route answers from the last
+  summary and recomputes behind it — at most once a minute, and only when the archive
+  has grown. A dead archiver therefore costs nothing rather than a full-day rescore
+  every minute until midnight.
+- **A holed record is said out loud.** Arrivals are `STOPPED_AT` transitions, so a
+  minute of missing snapshots loses whole trains and the day scores worse than it
+  ran. `gap_s` carries it and the panel prints "N min not recorded".
+
+### `stats.json` — the project's own record, written daily
 
 ```jsonc
 { "as_of": "2026-09-26", "window_days": 7,
@@ -131,11 +170,12 @@ point of `BROWSER_ROUTES` is that there is never a second thing.
   "by_lead": [{"bin": "5-10min", "n": 104, "p10": -61, "p50": -39, "p90": 78}] }
 ```
 
-`web/index.html` reads these field names directly and hides its panel when the file
-is absent or unparseable — so a missing `stats.json` degrades quietly, but a
-*renamed* field shows an empty panel instead of failing. Keep the names.
-`tests/test_stats.py` pins them from both sides, reading the names out of
-index.html itself rather than a list typed twice.
+No longer published to `web/`: the board's panel asks `/today`, and a file in the
+static origin that nothing fetches goes stale there with every test still green.
+This is the record behind `data/scores.jsonl`, which outlives the archive that is
+pruned at 90 days. `tests/test_stats.py` still pins the contract, and pins the panel
+to `/today` from both sides — reading the field names out of index.html itself
+rather than a list typed twice.
 
 Where each field comes from, since they are not the same question (M3):
 
@@ -259,8 +299,8 @@ prediction's lead, the source is a label and the veto is the half with teeth.)
   publishes `web/model.js` as well, the same bytes as a script, and `app.js` falls
   back to it. Without it the static board never got a model.
 - Live predictions and vehicles *do* fetch cross-origin from a `file://` page, so
-  only the sibling assets needed the fallback. `stats.json` degrades to a hidden
-  panel, and the skip set to an empty one.
+  only the sibling assets needed the fallback. The skip set degrades to an empty
+  one, and the self-score to a hidden panel.
 
 `tests/board_smoke.py` drives the real page (playwright, MBTA and ntfy stubbed,
 ~90 s, not collected by pytest) and checks 18 properties of it, including the
@@ -286,7 +326,7 @@ manifest, each derived entry naming the file under `data/` it must equal:
 | `index.html`, `app.js` | — | authored in `web/`, which *is* the origin |
 | `model.json` | `data/model.json` | fitted quantiles, fetched |
 | `model.js` | `data/model.json`, script-wrapped | a `file://` board cannot fetch a sibling file at all |
-| `stats.json` | `data/stats.json` | the self-score |
+| `icon-180.png` | — | drawn by `src/make_icon.py`; iOS will not take an SVG |
 
 **A refit publishes three artifacts, not one.** A publisher carrying only
 `data/model.json` leaves the board predicting from the previous rating with nothing
@@ -395,11 +435,15 @@ cover any of that — the contract test stops at the rows, so a deleted CSS rule
 a renamed field would have gone unnoticed.
 
 **Deployed 2026-09-26 and verified end to end.** `com.magoun.server` runs
-`serve.sh`, and `tailscale serve` publishes exactly two paths — so the proxy
-enforces the same line `BROWSER_ROUTES` does, from the other side. Measured
-through it: `/skips` and `/capture` answer 200 with `access-control-allow-origin: *`;
-`/api`, `/status`, `/board` and `/history` answer 404. `./ops/status.sh` checks all
-of it in one command. The exact `serve` invocations are in CLAUDE.md.
+`serve.sh`, and `tailscale serve` publishes exactly the paths `BROWSER_ROUTES`
+allows — so the proxy enforces the same line from the other side. Measured through
+it: `/skips` and `/capture` answer 200 with `access-control-allow-origin: *`;
+`/api`, `/status`, `/board` and `/history` answer 404. `/today` is allowlisted but
+its proxy path is not set yet; until it is, the board hides that panel exactly as it
+does off the tailnet. `./ops/status.sh` checks all of it in one command, reading
+both lists out of `server.py` rather than keeping its own copy — they were literals
+in three places, which is how a new route gets published and checked by nothing.
+The exact `serve` invocations are in CLAUDE.md.
 
 **Still unobserved: a real one.** Skips are ~10/day system-wide, rare at Magoun,
 and the marker lands ~2 min before the scheduled arrival. Note the notifier could

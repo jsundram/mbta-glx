@@ -363,6 +363,10 @@ const QS = [0.1, 0.5, 0.9];     // mirrors service.etas' default quantiles
 // scores it cannot drift apart. Set once the model loads, which always happens
 // before walkSeconds() can be reached (it is only called with a row in hand).
 let walkDefaultS = null;
+// The backend's base, once the model has loaded. index.html's own panel needs it
+// and has no other way to see model.json -- which is the one place a host may be
+// published, precisely so grepping web/ for a URL cannot miss it.
+let backendBase = null;
 
 const store = {
   get(k, dflt) {
@@ -653,6 +657,7 @@ function start(onData, onError) {
     modelText = text;
     model = new Model(JSON.parse(text));
     walkDefaultS = model.need("walk_s");   // throws on a deploy that dropped it
+    backendBase = (model.m.constants || {}).backend_url || null;
     // status.html reloads the page when `version` changes; tie it to the model so
     // a refit published under a tablet reaches the rider without a manual reload.
     model.version = `m${text.length}:${model.m.days}:${model.m.n_legs}`;
@@ -727,6 +732,7 @@ function start(onData, onError) {
 
 exports.start = start;
 exports.walkSeconds = walkSeconds;
+exports.backendURL = () => backendBase;
 exports.serviceDate = serviceDate;
 exports.store = store;
 exports.POLL_MS = POLL_MS;

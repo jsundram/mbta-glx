@@ -3,8 +3,12 @@
 Run:  uv run --with polars python src/server.py [port]
 Then: http://localhost:8723/?walk=6
 """
+import datetime as dt
+import gzip
 import json
 import pathlib
+import re
+import statistics
 import sys
 import threading
 import time
@@ -66,12 +70,223 @@ BROWSER_ROUTES = {
     # before.
     "/capture": ("a browser cannot know when a file on this Mac was last written, "
                  "and an un-captured day cannot be re-fetched"),
+    # A third, and it is the same test and the same argument. Scoring today needs
+    # today's whole prediction stream and today's arrivals, which are in data/live
+    # on this Mac; the board has been open for ten minutes and cannot know what the
+    # 07:14 said. Aggregates only -- counts and a median, never rows -- so the
+    # static property holds: the board still computes every ETA it displays, and
+    # with this unreachable it hides one panel and is otherwise unchanged.
+    "/today": ("a browser cannot score today -- it needs the whole day's prediction "
+               "stream and arrivals, which is the archive on this Mac, and the board "
+               "has been open ten minutes; aggregates only, never computed rows"),
 }
 
 # The archiver appends every 15 s, and the largest ordinary gap measured across a
 # 15-hour day was 18 s. Ten minutes is therefore not jitter -- it is asleep, dead
 # or throttled, and every minute of it is data that cannot be re-fetched.
 CAPTURE_STALE_S = 600
+
+# --- today's score, the panel the board shows -------------------------------
+# Recomputed OFF the request path, deliberately. This server is single-threaded and
+# shares it with /skips, and a full day costs ~0.6 s (measured 2026-09-26: 112
+# arrivals out of 150,817 prediction rows, and it grows through the day because the
+# gzip has to be read from the start every time -- nothing about this stream is
+# seekable or incremental). Serving that synchronously would stall the skip fetch
+# the board makes in the same tick, behind a 2.5 s timeout. So a request answers
+# instantly from the last computed summary and kicks a recompute behind it.
+#
+# Two things gate that recompute, because a blind timer is the wrong shape here:
+#
+#  * A floor of 60 s between passes. A train arrives every 8.8 min at the median,
+#    so 60 s is already nine times oversampled for "a new train showed up", and the
+#    board polls on its own minute on top of that.
+#  * The archive must have GROWN since the last pass. The archiver appends every
+#    15 s, so this is nearly always true while it is alive -- and exactly false when
+#    it is not, which is what stops a dead archiver costing a full-day rescore every
+#    minute until midnight.
+#
+# `as_of` 0 means "nothing computed yet", which the board treats as it treats an
+# unreachable backend: it hides the panel rather than showing an empty one.
+TODAY_MIN_INTERVAL_S = 60
+# "Within two minutes of the time it quoted." Published in the payload so the board
+# states the threshold the numbers were actually measured against.
+TODAY_CLOSE_S = 120
+# Below this a percentage is a rounding artifact wearing a measurement's clothes: at
+# 06:05 two trains have run and one of them is 50%. The board hides the panel.
+TODAY_MIN_TRAINS = 3
+# One entry per walk anyone has asked with. Keyed by walk because the rider's own
+# walk is the one the score has to be about -- it lives in their browser, not here,
+# and a coverage number computed against somebody else's front door is not about
+# them. A cap, not a single slot: with one slot, two devices on different walks
+# would each invalidate the other's entry on every request and neither would ever
+# see a body, which is a panel that silently never appears.
+TODAY_MAX_KEYS = 4
+
+_today_lock = threading.Lock()
+_today: dict[tuple[str, int], dict] = {}
+_today_running: set[tuple[str, int]] = set()
+
+
+def today_summary(rows: list[dict], day: str, walk: int, as_of: float,
+                  close_s: int = TODAY_CLOSE_S,
+                  gaps: tuple[int, int] = (0, 0)) -> dict:
+    """The four things the board says about today, from replay.score's rows. Pure.
+
+    Scored at the moment the rider ACTS, which is the whole point: `predicted` is
+    the ETA that was on screen when leave-now fired, not MBTA's last word thirty
+    seconds before the train, which is always accurate and never useful. So "early"
+    means the train beat the time you were quoted -- the failure that leaves you
+    watching it go -- and "late" means you stood there longer than you were told.
+
+    The three buckets partition: `err < -close`, `|err| <= close`, `err > close`,
+    summing to `trains`. The median wait is over the trains that were CAUGHT; a
+    missed train has a negative wait, and mixing those in makes a bad morning
+    produce a small reassuring median.
+    """
+    told = [r for r in rows if r["told"] is not None]
+    err = [r["arrival"] - r["predicted"] for r in told]
+    waits = [r["wait_s"] for r in told if r["caught"]]
+    return {
+        "day": day, "as_of": as_of, "ttl_s": TODAY_MIN_INTERVAL_S, "walk_s": walk,
+        "close_s": close_s, "min_trains": TODAY_MIN_TRAINS,
+        # Not a footnote: on a day the power went out these numbers are about the
+        # part of it that was recorded, and the board says so rather than implying
+        # it watched the whole day.
+        "gap_s": gaps[0], "max_gap_s": gaps[1],
+        "trains": len(told),
+        "early": sum(1 for e in err if e < -close_s),
+        "close": sum(1 for e in err if abs(e) <= close_s),
+        "late": sum(1 for e in err if e > close_s),
+        "caught": sum(1 for r in told if r["caught"]),
+        "median_wait_s": round(statistics.median(waits)) if waits else None,
+    }
+
+
+# A hole in today's capture is not a quiet matter for this panel. Arrivals are
+# counted as transitions into STOPPED_AT (invariant 2), and a dwell at Magoun is
+# 20-30 s, so a minute of missing snapshots loses whole arrivals -- and each lost
+# one also mispairs the predictions that were aimed at it. The score then comes out
+# worse than the day really was, with nothing to say so. The archiver appends every
+# 15 s and the largest ordinary gap measured across a 15-hour day was 18 s, so 60 s
+# is comfortably "this is not jitter".
+GAP_FLOOR_S = 60
+_T = re.compile(rb'^\{"t":\s*([0-9.]+)')
+
+
+def _capture_gaps(day: str) -> tuple[int, int]:
+    """(seconds unrecorded, longest single hole) in today's archive so far.
+
+    One extra pass over the gzip, reading only the leading "t" of each line rather
+    than parsing 25 MB of JSON: the decompression is the cost and it is ~0.2 s. Runs
+    in the same background thread as the score, once a minute at most.
+
+    The slow path is not optional. If a line does not start the way the archiver
+    writes them today, this falls back to parsing it -- because the failure mode of
+    a regex that silently matches nothing is "no gaps at all", which is the
+    reassuring answer, and it would arrive on the day the writer changed.
+    """
+    path = ROOT / "data" / "live" / f"rt-{day}.jsonl.gz"
+    total = longest = 0.0
+    prev = None
+    try:
+        with gzip.open(path, "rb") as fh:
+            for line in fh:
+                m = _T.match(line)
+                if m:
+                    t = float(m.group(1))
+                else:
+                    try:
+                        t = float(json.loads(line)["t"])
+                    except Exception:  # noqa: BLE001 - a blank or truncated tail line
+                        continue
+                if prev is not None and t - prev > GAP_FLOOR_S:
+                    total += t - prev
+                    longest = max(longest, t - prev)
+                prev = t
+    except OSError:
+        return 0, 0
+    return round(total), round(longest)
+
+
+def _archive_stamp(day: str) -> tuple[float, int] | None:
+    """(mtime, size) of today's archive, or None before its first append."""
+    try:
+        st = (ROOT / "data" / "live" / f"rt-{day}.jsonl.gz").stat()
+    except OSError:
+        return None
+    return (st.st_mtime, st.st_size)
+
+
+def _score_today(day: str, walk: int) -> dict | None:
+    """Today so far, or None if it cannot be scored honestly."""
+    if _archive_stamp(day) is None:
+        # Before the archiver's first append of the day. Not an error: an empty
+        # summary, which reads as "no trains yet" rather than as a dead backend.
+        return today_summary([], day, walk, time.time())
+    path = ROOT / "data" / "live" / f"rt-{day}.jsonl.gz"
+    try:
+        # day= is not optional: without it replay reads the three most recent
+        # schedule snapshots and the timetable tier silently vanishes, which is
+        # invariant 10 and costs ~12% of the coverage number.
+        rows = replay.score(walk=walk, n=10**9, paths=[path], day=day)
+    except replay.NoScheduleSnapshot as e:
+        # Loud, and no answer at all. A day with no captured timetable scores
+        # without the tier that carries the horizon past ~13 min, and publishing
+        # that as "how trains have run today" would be a quietly wrong number.
+        print(f"/today: {e}", file=sys.stderr, flush=True)
+        return None
+    except Exception as e:  # noqa: BLE001 - one bad day must not kill the server
+        print(f"/today failed for {day}: {e!r}", file=sys.stderr, flush=True)
+        return None
+    return today_summary(rows, day, walk, time.time(),
+                         gaps=_capture_gaps(day))
+
+
+def _refresh_today(key: tuple[str, int]) -> None:
+    day, walk = key
+    # Stamped BEFORE the scan, not after: the archiver appends while this runs, and
+    # recording the later stamp would mark those snapshots as already scored.
+    stamp = _archive_stamp(day)
+    try:
+        summary = _score_today(day, walk)
+    finally:
+        with _today_lock:
+            _today_running.discard(key)
+    if summary is None:
+        return
+    with _today_lock:
+        _today[key] = {"body": json.dumps(summary).encode(),
+                       "at": time.time(), "stamp": stamp}
+        while len(_today) > TODAY_MAX_KEYS:
+            _today.pop(min(_today, key=lambda k: _today[k]["at"]))
+
+
+def today_body(day: str, walk: int) -> bytes:
+    """The last computed summary, plus a recompute if one is due. Never waits."""
+    key = (day, walk)
+    with _today_lock:
+        ent = _today.get(key)
+        due = ent is None or (
+            time.time() - ent["at"] >= TODAY_MIN_INTERVAL_S
+            and _archive_stamp(day) != ent["stamp"])
+        if due and key not in _today_running:
+            _today_running.add(key)
+            threading.Thread(target=_refresh_today, args=(key,),
+                             daemon=True).start()
+        if ent:
+            return ent["body"]
+    return json.dumps(today_summary([], day, walk, 0.0)).encode()
+
+
+def warm_today() -> None:
+    """Score today before the first board asks, so a restart costs no empty panel."""
+    key = (dt.datetime.now(service.TZ).date().isoformat(), service.DEFAULT_WALK)
+    with _today_lock:
+        if key in _today_running:
+            return
+        _today_running.add(key)
+    threading.Thread(target=_refresh_today, args=(key,), daemon=True).start()
+
 
 # How long the board may trust a skip set. Two of service.skipped_trips' own 30 s
 # cache cycles: long enough that an ordinary miss does not blank the strikethrough,
@@ -118,7 +333,7 @@ class Handler(BaseHTTPRequestHandler):
                 rows = service.etas(snap, _model, 0, berths=berths)
                 now = snap["t"]
                 slots = service.schedule_today(
-                    __import__("datetime").datetime.fromtimestamp(now, service.TZ).date())
+                    dt.datetime.fromtimestamp(now, service.TZ).date())
                 line = service.line_map(snap)
                 # A train is only "at the station" if the same snapshot also places
                 # it stopped at Magoun. Otherwise the hero and the map can disagree,
@@ -180,6 +395,12 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:  # noqa: BLE001
                 self._send(503, "application/json",
                            json.dumps({"error": str(e)}).encode())
+        elif u.path == "/today":
+            # Invariant 8: the agency's day, never the host's. On a UTC-clocked host
+            # the date rolls over at 20:00 ET, which would score the evening commute
+            # against tomorrow's empty archive.
+            day = dt.datetime.now(service.TZ).date().isoformat()
+            self._send(200, "application/json", today_body(day, _walk(u.query)))
         elif u.path == "/capture":
             # The newest archive file's mtime, not today's by name: the archiver
             # opens, appends and closes once per snapshot, so mtime is the
@@ -228,5 +449,8 @@ if __name__ == "__main__":
     # it through `tailscale serve`, which terminates TLS on the tailnet and proxies
     # to loopback. So the wider bind buys nothing and costs the LAN an open port.
     #
-    #   tailscale serve --bg --https 443 --set-path /skips http://127.0.0.1:8723/skips
+    #   tailscale serve --bg --https 443 --set-path /skips   http://127.0.0.1:8723/skips
+    #   tailscale serve --bg --https 443 --set-path /capture http://127.0.0.1:8723/capture
+    #   tailscale serve --bg --https 443 --set-path /today   http://127.0.0.1:8723/today
+    warm_today()
     HTTPServer(("127.0.0.1", port), Handler).serve_forever()

@@ -691,12 +691,13 @@ split the rider asked for is real:
 
 ```
   static site  ──fetch──>  api-v3.mbta.com        (live, CORS, no key needed)
-   (Pages/CDN) ──fetch──>  model.json, stats.json (published by the backend)
-                ──fetch──>  <backend_url>/skips, /capture   (what browsers cannot get)
+   (Pages/CDN) ──fetch──>  model.json             (published by the backend)
+                ──fetch──>  <backend_url>/skips, /capture, /today
+                                                   (what browsers cannot get)
 
   backend (small, always-on)
      record_rt.py    continuous capture  ──>  data/live, data/pairs
-     daily.sh        rollup + fit        ──>  publishes model.json / stats.json
+     daily.sh        rollup + fit        ──>  publishes model.json
      server.py  GET /skips               ──>  parsed from the protobuf feed
      watch.py        the notifier (needs always-on scheduling)
 ```
@@ -718,7 +719,7 @@ split the rider asked for is real:
 | piece | where | cost |
 |---|---|---|
 | static board | GitHub Pages / Cloudflare Pages | £0 |
-| model.json / stats.json | committed artifacts, published by CI | £0 |
+| model.json | committed artifact, published by CI | £0 |
 | daily rollup + refit | GitHub Actions cron (daily granularity is fine) | £0 |
 | archiver + skips + notifier | Raspberry Pi, or fly.io / small VPS | £0–5/mo |
 
@@ -759,7 +760,11 @@ but it is the fallback if the JS port starts growing.
       `replay.score` (one rider per real arrival), cost from `simulate.run` (riders
       on a five-minute grid, both means from the same riders), and `by_lead` from
       `data/pairs`, which is never pruned. Measured 2026-09-24/25: caught 185/198,
-      platform wait 3.7 min, door-to-train 15.6 min. `src/publish.py` moves the
+      platform wait 3.7 min, door-to-train 15.6 min (181/198 and 3.6 min once the
+      MBTA band was fitted rather than guessed symmetric). It is the project's own
+      record now, not the rider's panel: the board asks `/today` instead, because a
+      file written from *closed* days and served from Pages can never answer "how
+      have trains been running today". `src/publish.py` moves the
       published set and refuses a partial one; write-only unless `--commit`, and it
       never pushes.
 - [x] **GitHub Actions.** Not the daily rollup: `data/live`, `data/pairs` and

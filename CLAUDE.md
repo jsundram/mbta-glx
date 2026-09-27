@@ -31,7 +31,8 @@ repo, so everything that reads it runs on this host; CI only runs the suite.
 
 ```bash
 ./src/daily.sh                                   # rollup, score, suite, origin check
-uv run --with polars --with numpy python src/stats.py    # score closed days -> stats.json
+uv run --with polars --with numpy python src/stats.py    # score closed days -> data/stats.json
+uv run python src/make_icon.py                   # redraw web/icon-180.png
 uv run python src/publish.py --check             # is web/ complete and current?
 uv run python src/publish.py --commit            # commit what moved; never pushes
 ./src/refit.sh                                   # rebuild dataset, refit, diff, suite
@@ -57,17 +58,24 @@ that is the only way the rider's phone reaches the backend.
 | `com.magoun.watch` | `watch.sh` → the notifier | yes — no push, no error |
 | `com.magoun.daily` | `daily.sh`, scheduled | no — it leaves a log |
 
-`tailscale serve` publishes exactly two paths, so the proxy enforces the same line
-`BROWSER_ROUTES` does. Set once, survives reboot, lost if Tailscale is reinstalled
+`tailscale serve` publishes exactly the paths `BROWSER_ROUTES` allows, so the proxy
+enforces the same line. Set once, survives reboot, lost if Tailscale is reinstalled
 or `tailscale serve --https=443 off` is run:
 
 ```bash
 tailscale serve --bg --https 443 --set-path /skips   http://127.0.0.1:8723/skips
 tailscale serve --bg --https 443 --set-path /capture http://127.0.0.1:8723/capture
+tailscale serve --bg --https 443 --set-path /today   http://127.0.0.1:8723/today
 ```
 
-Verified live: `/skips` and `/capture` answer 200 with `access-control-allow-origin: *`
-through the proxy; `/api`, `/status`, `/board` and `/history` answer **404** there.
+`/skips` and `/capture` are verified live: 200 with `access-control-allow-origin: *`
+through the proxy, while `/api`, `/status`, `/board` and `/history` answer **404**
+there. `/today` is verified on **loopback** — 200, `access-control-allow-origin: *`,
+48 trains scored, 19 ms for a cached hit — but its proxy path is **not set yet**, so
+it is unreachable from the phone until that third line is run and
+`com.magoun.server` is restarted onto the code that serves it. Until then the board
+simply hides the panel, which is what it does off the tailnet anyway. `./ops/status.sh` checks every allowlisted path and every private one, and
+reads both lists out of `server.py` rather than keeping its own copy.
 
 Secrets live in `ops/secrets.env` (gitignored; `ops/ntfy.env` is the older name and
 is still read). `ops/secrets.env.example` documents all three values. The board
@@ -109,14 +117,26 @@ uv run --with numpy --with gtfs-realtime-bindings python tests/live_notifier.py
   a real no-show, so it names what it could *not* exercise rather than reporting a
   quiet window as success.
 
-The backend serves the board two things it cannot fetch, both allowlisted in
-`server.BROWSER_ROUTES` and both reached at `constants.backend_url`:
-`/skips` (the protobuf-only skip set) and `/capture` (when the archive was last
-appended to, so a dead archiver is visible rather than silent). Reachable over
-Tailscale; unreachable is a normal state and must not be rendered as failure.
+The backend serves the board three things it cannot fetch, all allowlisted in
+`server.BROWSER_ROUTES` and all reached at `constants.backend_url`: `/skips` (the
+protobuf-only skip set), `/capture` (when the archive was last appended to, so a
+dead archiver is visible rather than silent) and `/today` (how trains have actually
+run today — aggregates only, never rows, because scoring a day needs the whole
+day's prediction stream and arrivals). Reachable over Tailscale; unreachable is a
+normal state and must not be rendered as failure — each of the three degrades to
+one missing feature, never to a broken board.
+
+`/today` never scores on the request path: this server is single-threaded and the
+board fetches `/skips` in the same tick behind a 2.5 s timeout. It answers from the
+last summary and recomputes behind that, at most once a minute and only when the
+archive has actually grown — so a dead archiver costs nothing, which on a storm
+weekend is the case that matters.
 
 `web/` **is** the static origin — Pages uploads it as-is. `publish.py` moves files
-and never derives them; `fit.py` and `stats.py` are what write `data/`.
+and never derives them; `fit.py` and `stats.py` are what write `data/`. `stats.json`
+is **not** published any more: the board's self-score panel asks `/today`, and a file
+in `web/` that nothing fetches goes stale there with every test still green.
+`data/stats.json` remains the project's own record.
 
 ## Invariants — breaking these fails silently
 

@@ -92,10 +92,14 @@ MANIFEST = [
     Artifact("model.json", DATA / "model.json", why="fitted quantiles, fetched"),
     Artifact("model.js", DATA / "model.json", script=True,
              why="the same bytes as a script, for file://"),
-    Artifact("stats.json", DATA / "stats.json", why="the self-score"),
+    Artifact("icon-180.png", why="the home-screen icon, for iOS"),
 ]
+# stats.json was here until the self-score panel started asking the backend for
+# TODAY instead. A published file nothing fetches is the same decoration as an
+# allowlist nothing consults: it would have gone stale in the origin with every
+# test still green, because no test would have had a reason to read it.
 FIX = {"model.json": "src/fit.py", "model.js": "src/fit.py",
-       "stats.json": "src/stats.py"}
+       "icon-180.png": "src/make_icon.py"}
 
 
 def check() -> list[tuple[Artifact, str]]:
@@ -190,7 +194,8 @@ def main() -> None:
                 fix = FIX.get(art.name, "add the file to web/")
                 print(f"  {art.name}: {s} -- run {fix}")
             sys.exit(1)
-        print("\nall five artifacts present and current")
+        # Counted, not spelled: "all five" outlived the five.
+        print(f"\nall {len(MANIFEST)} artifacts present and current")
         return
 
     moved = publish()

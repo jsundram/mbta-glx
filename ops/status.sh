@@ -33,17 +33,26 @@ fi
 
 echo "endpoints"
 base=$(python3 -c "import json;print(json.load(open('data/config.json')).get('backend_url',''))")
-for p in /skips /capture; do
+# Read from server.py rather than typed here. These were two literal lists in three
+# places, so a third route -- /today -- would have been added to the server, published
+# through the proxy, and checked by nothing: a route that stops answering would then
+# be exactly as visible as a route that never existed. Scraped, not imported, because
+# this script must run with no dependencies installed.
+exposed=$(awk '/^BROWSER_ROUTES = \{/{f=1;next} f&&/^\}/{f=0} f' src/server.py \
+          | sed -n 's|.*"\(/[a-z]*\)".*|\1|p' | sort -u)
+private=$(sed -n 's|.*u\.path == "\(/[a-z]*\)".*|\1|p' src/server.py | sort -u \
+          | grep -vxF "$exposed" || true)
+for p in $exposed; do
   code=$(curl -s -o /dev/null --max-time 6 -w '%{http_code}' "http://127.0.0.1:8723$p")
   [ "$code" = 200 ] && ok "localhost:8723$p" || bad "localhost:8723$p -> HTTP $code"
 done
 if [ -n "$base" ]; then
-  for p in /skips /capture; do
+  for p in $exposed; do
     code=$(curl -s -o /dev/null --max-time 10 -w '%{http_code}' "$base$p")
     [ "$code" = 200 ] && ok "$base$p" || bad "$base$p -> HTTP $code (tailscale serve?)"
   done
-  # The line that keeps the board static: only those two may be reachable.
-  for p in /api /status /board /history; do
+  # The line that keeps the board static: only the allowlisted ones may be reachable.
+  for p in $private; do
     code=$(curl -s -o /dev/null --max-time 10 -w '%{http_code}' "$base$p")
     [ "$code" = 404 ] && ok "$base$p is NOT exposed" \
                       || bad "$base$p answers $code -- it must not be on the tailnet"

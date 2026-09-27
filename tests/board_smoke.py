@@ -9,9 +9,10 @@ has to be handed to the notifier to be refined at all. So this replays a fixture
 if it were happening now and watches what the page actually posts.
 
 Both shapes are covered because they differ. From file:// no sibling file can be
-fetched, so the model arrives as a script and the self-score panel hides itself.
-Over HTTP -- which is what Pages serves -- stats.json is reachable and the panel is
-populated; that half is the only check on the published self-score.
+fetched, so the model arrives as a script. Over HTTP -- which is what Pages serves --
+it is fetched, and so is the home-screen icon; that half is the only run that takes
+either branch. The self-score panel is neither: it asks the backend how trains have
+run today, and today is a question no published file can answer.
 
 Not collected by pytest on purpose: it needs playwright, a browser and ~90 s.
 
@@ -414,6 +415,117 @@ def firstrun_scenario(browser, check) -> None:
     page.close()
 
 
+def today_scenario(browser, check) -> None:
+    """The self-score panel, which now asks the backend how trains have run TODAY.
+
+    It was a table of MBTA prediction-error quantiles binned by lead time, read off
+    the published multi-day stats.json -- a question for whoever is fitting the
+    model, not for someone standing on a platform. Today cannot come from a
+    published file at all: stats.json is written from CLOSED days and this page is
+    served from Pages, so nothing computed on the Mac during the day could reach it.
+
+    Both halves matter. The panel has to render the backend's aggregate, and it has
+    to disappear when the backend is unreachable -- which off the tailnet, or on a
+    Mac without power, is the normal state and must not be a stale number wearing
+    today's label.
+    """
+    fixture = sorted((ROOT / "tests" / "fixtures").glob("cases-*.json"))[0]
+    case = json.loads(fixture.read_text())[0]
+    live = shifted(case, time.time() - case["now"] + 30)
+    consts = json.loads((ROOT / "web" / "model.json").read_text())["constants"]
+    host = re.escape(consts["backend_url"].split("/")[2])
+    payload = {"day": "2026-09-27", "as_of": time.time(), "ttl_s": 60,
+               "walk_s": WALK_S, "close_s": 120, "min_trains": 3,
+               "gap_s": 0, "max_gap_s": 0, "trains": 47,
+               "early": 13, "close": 23, "late": 11,
+               "caught": 21, "median_wait_s": 147}
+
+    def page_with(body, asked):
+        page = browser.new_page()
+        page.add_init_script(f"""localStorage.setItem("magoun.walk", "{WALK_S}");
+                                 localStorage.removeItem("magoun.berths");""")
+        stub(page, live)
+        page.route(re.compile(r"ntfy\.sh"), lambda r: r.fulfill(status=200, json={}))
+
+        def backend(route):
+            u = route.request.url
+            asked.append(u)
+            if "/today" in u:
+                if body is None:
+                    return route.abort()
+                return route.fulfill(status=200, content_type="application/json",
+                                     body=json.dumps(body))
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({"as_of": time.time(), "trips": [],
+                                           "ttl_s": 60, "stale_after_s": 600}))
+        page.route(re.compile(host), backend)
+        page.goto(BOARD)
+        page.wait_for_timeout(6000)
+        return page
+
+    asked = []
+    page = page_with(payload, asked)
+    print("\n  how trains have run today, from the backend")
+    check("the board asked the backend for today's score",
+          any("/today" in u for u in asked),
+          " ".join(u.split("/")[-1] for u in asked[:3]))
+    check("and sent its own walk, not the published default",
+          any(f"walk={WALK_S / 60:.2f}" in u for u in asked),
+          next((u for u in asked if "/today" in u), "")[-30:])
+    check("the panel is shown", not page.is_hidden("#hist"))
+    window = page.inner_text("#histWindow")
+    bars = page.inner_text("#histBars").replace("\n", " ")
+    note = page.inner_text("#histNote").replace("\n", " ")
+    print(f"  {window}\n  {bars[:90]}\n  {note[:100]}")
+    check("it says today, and how many trains", "today" in window and "47" in window,
+          window)
+    # 13/47 = 28%, 23/47 = 49%, 11/47 = 23%. Percentages of the trains scored, not
+    # of anything else: three numbers that do not add up are a different question's
+    # answer.
+    check("the three buckets are percentages of today's trains",
+          all(p in bars for p in ("28%", "49%", "23%")), bars[:80])
+    check("and they are named in minutes, from the threshold the backend used",
+          "2 min early" in bars and "within 2 min" in bars and "2 min late" in bars,
+          bars[:80])
+    check("the catch rate and the median wait are stated as a sentence",
+          "45%" in note and "2.5 min" in note, note[:90])
+    # The bars are a magnitude each, not one stacked bar in three colours: this
+    # page's amber and green are 4.2 apart under deuteranopia in light mode, and its
+    # green and red 0.7 apart in dark, so touching segments would read as one shape.
+    widths = page.eval_on_selector_all(
+        "#histBars .bfill", "es => es.map(e => e.style.width)")
+    check("each bucket is drawn as its own bar", len(widths) == 3, str(widths))
+    check("and the bars are the percentages, not a fixed shape",
+          widths == ["28%", "49%", "23%"], str(widths))
+    page.close()
+
+    # A holed record is not a footnote: arrivals are STOPPED_AT transitions, so a
+    # minute of missing snapshots loses whole trains and the day scores worse than
+    # it ran. A storm weekend is exactly when this matters.
+    holed = dict(payload, gap_s=900, max_gap_s=600)
+    page = page_with(holed, [])
+    check("a holed capture is said out loud, not swallowed",
+          "not recorded" in page.inner_text("#histWindow"),
+          page.inner_text("#histWindow"))
+    page.close()
+
+    # Too few trains: a percentage of two is a rounding artifact, not a measurement.
+    page = page_with(dict(payload, trains=2, early=1, close=1, late=0), [])
+    check("and it hides rather than make a percentage out of two trains",
+          page.is_hidden("#hist"))
+    page.close()
+
+    page = page_with(None, [])
+    errs = []
+    page.on("pageerror", lambda e: errs.append(str(e)[:150]))
+    check("with the backend unreachable the panel hides",
+          page.is_hidden("#hist"))
+    check("and the board itself is unaffected",
+          bool(page.inner_text("#heroBig").strip()) and not errs,
+          "; ".join(errs[:2]))
+    page.close()
+
+
 def upgrade_scenario(browser, check) -> None:
     """A board that was set up before the handoff existed.
 
@@ -463,20 +575,18 @@ def upgrade_scenario(browser, check) -> None:
 
 
 def served_scenario(browser, check) -> None:
-    """The same page over HTTP, which is the only place the self-score can appear.
+    """The same page over HTTP from the directory root: the deployed shape.
 
-    A board opened as file:// cannot fetch a sibling file at all, so stats.json is
-    unreachable there and the panel hides itself -- by design, and verified below.
-    Pages serves web/ over HTTP, so this is the deployed shape: the one where
-    stats.json is fetched and the panel is populated. Nothing else in this file
-    covers it, because until M3 there was no stats.json to fetch.
+    Everything else here runs from file://, where a sibling file cannot be fetched
+    at all. Pages serves web/ over HTTP from a directory, so the assets that a
+    file:// board reaches by fallback -- model.json rather than model.js -- are only
+    exercised here, and so is the icon a home-screen shortcut asks for.
     """
     import functools
     import http.server
     import socketserver
     import threading
 
-    stats = json.loads((ROOT / "web" / "stats.json").read_text())
     # Quiet: the request log would bury the checks. This has to be a subclass --
     # setting .log_message on a functools.partial succeeds silently and does
     # nothing, because the partial is not the handler class.
@@ -501,34 +611,22 @@ def served_scenario(browser, check) -> None:
         page.wait_for_timeout(5000)
 
         print(f"\n  serving web/ over HTTP on {port} (the deployed shape)")
-        check("the self-score panel is shown when stats.json is reachable",
-              not page.is_hidden("#hist"))
-        summary = page.inner_text("#histSum").replace("\n", " ")
-        window = page.inner_text("#histWindow")
-        print(f"  score: {summary[:150]}")
-        check("it reports the real caught count",
-              f"{stats['caught']}" in summary and f"{stats['of']}" in summary,
-              summary[:80])
-        check("platform wait is shown in minutes",
-              f"{stats['mean_platform_wait_s'] / 60:.1f} min" in summary)
-        # Platform wait alone rewards dawdling, so the board has to show both.
-        check("door-to-train is shown beside it",
-              "boarding" in summary
-              and f"{stats['mean_door_to_train_s'] / 60:.1f} min" in summary)
-        check("the window it scored is named",
-              f"{stats['window_days']} day" in window and stats["as_of"] in window,
-              window)
-        rows = page.inner_text("#histRows")
-        check("every lead bin is rendered",
-              all(b["bin"].replace("min", " min") in rows for b in stats["by_lead"]),
-              f"{len(stats['by_lead'])} bins")
-        check("a bin shows its sample size", str(stats["by_lead"][0]["n"]) in rows)
-        # stats.json publishes err = predicted - actual, so a negative p50 is a
-        # train that came LATE. Printing the raw sign read as the opposite.
-        p50 = stats["by_lead"][0]["p50"]
-        check("and says late or early rather than a signed error",
-              f"{abs(p50)}s {'late' if p50 < 0 else 'early'}" in rows,
-              rows.replace("\n", " | ")[:100])
+        check("the board paints when served from the directory root",
+              bool(page.inner_text("#heroBig").strip()))
+        # From file:// the model arrives as a script; over HTTP it is fetched, and
+        # this is the only run that takes that branch.
+        check("the model was fetched, not injected as a script",
+              page.evaluate("!!document.querySelector('script[src=\"model.js\"]') === false"))
+        icon = page.evaluate("""async () => {
+            const el = document.querySelector('link[rel="apple-touch-icon"]');
+            if (!el) return "no apple-touch-icon";
+            const r = await fetch(el.getAttribute("href"));
+            return r.ok ? r.headers.get("content-type") : `HTTP ${r.status}`;
+        }""")
+        # A home-screen shortcut with a 404 behind it gets a screenshot of the page,
+        # which at icon size is a grey smear -- and nothing in the browser says so.
+        check("the home-screen icon is actually served", "image/png" in (icon or ""),
+              str(icon))
         page.close()
         httpd.shutdown()
 
@@ -696,11 +794,12 @@ def run(case_index: int, headed: bool) -> int:
         # second arm would add a stale "Leave now" rather than move the first.
         check("and no other row offers to arm a second one",
               page.eval_on_selector_all("button[data-arm]", "e => e.length") == 1)
-        # The documented degradation: from file:// stats.json cannot be fetched at
-        # all, so the panel hides rather than showing an empty box.
-        check("the self-score panel hides itself from file://",
+        # No backend stubbed in this scenario, so /today goes unanswered and the
+        # panel hides -- the same degradation as a phone off the tailnet.
+        check("the self-score panel hides itself with no backend answering",
               page.is_hidden("#hist"))
         dwell_scenario(browser, check)
+        today_scenario(browser, check)
         firstrun_scenario(browser, check)
         upgrade_scenario(browser, check)
         skip_scenario(browser, check)
@@ -714,7 +813,7 @@ def run(case_index: int, headed: bool) -> int:
         print(f"FAILED: {len(failures)} check(s): {', '.join(failures)}")
         return 1
     print("all checks passed: the board runs from file:// with no backend, "
-          "and serves its self-score over HTTP")
+          "and from the directory root the way Pages serves it")
     return 0
 
 

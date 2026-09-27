@@ -14,12 +14,14 @@ snapshot) are stubbed, and a route that fails still goes through `_send`, which 
 the code under test.
 """
 import http.client
+import inspect
 import json
 import os
 import pathlib
-import sys
 import subprocess
+import sys
 import threading
+import time
 from http.server import HTTPServer
 
 import pytest
@@ -101,7 +103,8 @@ def test_an_unknown_route_is_not_reachable_cross_origin(live):
 
 def test_every_route_that_sends_cors_is_on_the_allowlist(live):
     """Walk the real surface rather than trusting the one grep above it."""
-    for path in ("/skips", "/api", "/status", "/history", "/board", "/", "/nope"):
+    for path in ("/skips", "/capture", "/today", "/api", "/status", "/history",
+                 "/board", "/", "/nope"):
         _, headers, _ = get(live, path)
         sent = "Access-Control-Allow-Origin" in headers
         assert sent == (path in server.BROWSER_ROUTES), \
@@ -240,6 +243,137 @@ def test_capture_is_reachable_cross_origin_and_is_on_the_allowlist(live):
     assert "/capture" in server.BROWSER_ROUTES
 
 
+def test_status_sh_checks_exactly_the_routes_the_server_allowlists():
+    """ops/status.sh is the one command that says whether the deployment is healthy.
+
+    It held two literal route lists in three places. A third route would have been
+    added to the server, published through the proxy, and checked by nothing -- so a
+    /today that had stopped answering would be exactly as visible as a /today that
+    had never been built, which is the failure mode this whole file is about.
+    """
+    root = pathlib.Path(__file__).resolve().parent.parent
+    script = root / "ops" / "status.sh"
+    src = script.read_text()
+    # Run the script's OWN lines, not a copy of them: a copy in here would agree
+    # with itself forever while status.sh drifted.
+    block = src[src.index("exposed=$("):src.index("for p in $exposed")]
+    out = subprocess.run(
+        ["bash", "-c", f"cd {root}\n{block}\necho \"$exposed\"; echo --; echo \"$private\""],
+        capture_output=True, text=True, check=True)
+    exposed, private = (b.split() for b in out.stdout.split("--"))
+    assert set(exposed) == set(server.BROWSER_ROUTES), (
+        f"status.sh checks {sorted(exposed)} as public, the server allowlists "
+        f"{sorted(server.BROWSER_ROUTES)}")
+    assert set(private) and not set(private) & set(server.BROWSER_ROUTES)
+    assert "/api" in private, "the computed-rows route is no longer checked as private"
+    # And the script must actually use the scrape rather than keeping a literal beside it.
+    src = script.read_text()
+    assert "BROWSER_ROUTES" in src, "status.sh does not read the allowlist"
+    assert "for p in /skips" not in src, "status.sh still has a literal route list"
+
+
+# --- today's score: the panel's only source, and it must never stall the board ---
+
+def test_today_answers_at_once_even_with_nothing_computed(live):
+    """The request path never scores anything.
+
+    This server is single-threaded and shares it with /skips, which the board
+    fetches in the same tick behind a 2.5 s timeout. A synchronous rescore would
+    stall that fetch; a slow one would stall the whole board.
+    """
+    t0 = time.time()
+    status, headers, body = get(live, "/today")
+    assert status == 200
+    assert time.time() - t0 < 1.0, "the route scored on the request path"
+    d = json.loads(body)
+    # Whatever the state, the shape is the same: the board branches on `trains`,
+    # not on a missing key.
+    assert {"day", "as_of", "trains", "early", "close", "late", "caught",
+            "close_s", "min_trains", "gap_s"} <= set(d)
+
+
+def test_today_is_reachable_cross_origin_and_is_on_the_allowlist(live):
+    _, headers, _ = get(live, "/today")
+    assert headers.get("Access-Control-Allow-Origin") == "*"
+    assert "/today" in server.BROWSER_ROUTES
+
+
+def test_today_is_the_agencys_day_not_the_hosts(live):
+    """Invariant 8. On a UTC-clocked host the date rolls at 20:00 ET, which would
+    score the evening commute against tomorrow's empty archive."""
+    import datetime as dt
+
+    import service
+    d = json.loads(get(live, "/today")[2])
+    assert d["day"] == dt.datetime.now(service.TZ).date().isoformat()
+    src = inspect.getsource(server.Handler.do_GET)
+    assert "service.TZ" in src.split('"/today"')[1][:400], \
+        "/today builds its date without the agency timezone"
+
+
+def test_a_second_walk_does_not_evict_the_first(monkeypatch):
+    """Two devices with different walks must not each blank the other's panel.
+
+    With a single cached slot they would: every request would find a key mismatch,
+    return the empty summary and kick a recompute for the other one. The panel
+    would then never appear on either device, and nothing would say why.
+    """
+    monkeypatch.setattr(server, "_today", {})
+    monkeypatch.setattr(server, "_today_running", set())
+    for walk in (390, 540):
+        server._today[("2026-09-27", walk)] = {
+            "body": json.dumps({"walk_s": walk}).encode(),
+            "at": time.time(), "stamp": server._archive_stamp("2026-09-27")}
+    for walk in (390, 540):
+        assert json.loads(server.today_body("2026-09-27", walk))["walk_s"] == walk
+
+
+def test_a_dead_archiver_does_not_cost_a_rescore_a_minute(monkeypatch, tmp_path):
+    """The recompute is gated on the archive having GROWN, not on the clock alone.
+
+    Without that gate, a Mac whose archiver has stopped -- which on a storm weekend
+    is a power cut -- rescores the whole day every minute until midnight for an
+    answer that cannot have changed.
+    """
+    monkeypatch.setattr(server, "ROOT", tmp_path)
+    live_dir = tmp_path / "data" / "live"
+    live_dir.mkdir(parents=True)
+    (live_dir / "rt-2026-09-27.jsonl.gz").write_bytes(b"x")
+    monkeypatch.setattr(server, "_today_running", set())
+    started = []
+    monkeypatch.setattr(server.threading, "Thread",
+                        lambda **kw: type("T", (), {"start": lambda s: started.append(kw)})())
+    key = ("2026-09-27", 390)
+    monkeypatch.setattr(server, "_today", {key: {
+        "body": b"{}", "at": 0.0,                       # long stale
+        "stamp": server._archive_stamp("2026-09-27")}})  # ...but unchanged
+    server.today_body(*key)
+    assert not started, "a stale-but-unchanged archive triggered a rescore"
+    (live_dir / "rt-2026-09-27.jsonl.gz").write_bytes(b"xy")   # the archiver wrote
+    server.today_body(*key)
+    assert started, "a grown archive did not trigger a rescore"
+
+
+def test_capture_gaps_are_measured_from_the_archive(monkeypatch, tmp_path):
+    """A hole in the record is reported, because a lost STOPPED_AT transition is a
+    lost arrival and the score comes out worse than the day was."""
+    import gzip
+    monkeypatch.setattr(server, "ROOT", tmp_path)
+    live_dir = tmp_path / "data" / "live"
+    live_dir.mkdir(parents=True)
+    with gzip.open(live_dir / "rt-2026-09-27.jsonl.gz", "wt") as f:
+        for i, t in enumerate((1000, 1015, 1030, 1630, 1645, 1900)):
+            # Mixed on purpose: the fast path reads the archiver's compact form off
+            # the front of the line, and the fallback parses anything else. A regex
+            # that quietly matches nothing reports a clean day.
+            sep = (",", ":") if i % 2 else (", ", ": ")
+            f.write(json.dumps({"t": t, "preds": [], "vehicles": []},
+                               separators=sep) + "\n")
+        f.write("\n")                                  # the tail the archiver is mid-write on
+    total, longest = server._capture_gaps("2026-09-27")
+    assert (total, longest) == (855, 600)   # a 600 s hole, then a 255 s one
+
+
 def test_the_stale_threshold_is_far_above_the_archivers_own_cadence():
     """15 s between appends, and the largest ordinary gap measured across a
     15-hour day was 18 s. A threshold near that would cry wolf on jitter."""
@@ -288,6 +422,23 @@ def test_every_launcher_of_the_skip_path_installs_the_protobuf_library():
     assert not offenders, (
         f"these launch code that reads the skip set without {PROTOBUF_DEP}, so it "
         "will silently report no skips:\n  " + "\n  ".join(offenders))
+
+
+def test_the_server_launcher_carries_what_today_needs_to_read_the_archive():
+    """`/today` replays the day's archive, and the archive readers import polars.
+
+    Same shape as the protobuf test above: `_score_today` catches everything, prints
+    to stderr and returns None, so a launcher missing the dependency serves an empty
+    summary forever -- and an empty summary is exactly what the board shows before
+    the first pass finishes. Nothing fails, so nothing says so, and the panel simply
+    never appears.
+    """
+    root = pathlib.Path(__file__).resolve().parent.parent
+    launcher = (root / "src" / "serve.sh").read_text()
+    assert "src/server.py" in launcher, "serve.sh no longer launches the server"
+    assert "--with polars" in launcher, (
+        "serve.sh launches the server without polars; src/archive.py and "
+        "src/rollup.py import it, so /today would answer an empty score forever")
 
 
 # --- a key in a public repo is a key given away ---

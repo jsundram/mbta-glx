@@ -47,8 +47,9 @@ def test_the_manifest_covers_every_asset_the_board_asks_for():
     """Two-sided: add a fetched asset without adding it here and this fails.
 
     An asset the board requests but the origin never publishes is a 404 the board
-    swallows -- stats.json hides its panel and model.js falls back. Neither fails
-    loudly, so the completeness of the origin cannot be checked in a browser.
+    swallows -- a missing model.js falls back, and a missing icon is a home-screen
+    shortcut with a screenshot on it. Neither fails loudly, so the completeness of
+    the origin cannot be checked in a browser.
 
     The skip set is no longer in this set at all: it is an absolute URL published
     in model.json's constants, so it is another origin's problem and the filter
@@ -57,6 +58,10 @@ def test_the_manifest_covers_every_asset_the_board_asks_for():
     src = (WEB / "index.html").read_text() + (WEB / "app.js").read_text()
     asked = set(re.findall(r'fetch\("([\w.-]+)"', src))
     asked |= set(re.findall(r'\.src = "([\w.-]+)"', src))
+    # Markup too, not just fetches: the icon is a <link href>, and an unpublished
+    # one is exactly the silent 404 this test exists for. A data: URI or an absolute
+    # URL cannot match the character class, which is what keeps them out.
+    asked |= set(re.findall(r'(?:href|src)="([\w.-]+\.\w+)"', src))
     # Absolute URLs are other people's origins (api-v3.mbta.com, ntfy.sh).
     asked = {a for a in asked if not a.startswith("http")}
     published = {a.name for a in publish.MANIFEST}
@@ -90,13 +95,40 @@ def test_a_stale_model_json_is_caught(origin):
     assert [a.name for a, _ in publish.check()] == ["model.json"]
 
 
-def test_a_stale_stats_json_is_caught(origin):
-    (origin / "stats.json").write_text('{"as_of": "1999-01-01"}')
-    assert [a.name for a, _ in publish.check()] == ["stats.json"]
+def test_the_icon_is_the_one_make_icon_draws(origin):
+    """A binary asset nobody can regenerate is one nobody can change.
+
+    Compares the DECODED image, not the file: zlib does not promise identical bytes
+    across versions, and a test that fails on a Python upgrade teaches people to
+    regenerate rather than to look.
+    """
+    import struct
+    import zlib
+
+    import make_icon
+    raw = (WEB / "icon-180.png").read_bytes()
+    assert raw[:8] == b"\x89PNG\r\n\x1a\n"
+    w, h, depth, colour = struct.unpack(">IIBB", raw[16:26])
+    assert (w, h, depth, colour) == (make_icon.SIZE, make_icon.SIZE, 8, 2), \
+        "iOS wants a square, opaque, full-bleed icon"
+    # Walk the chunks rather than assuming one IDAT at a fixed offset.
+    idat, i = b"", 8
+    while i < len(raw):
+        n = struct.unpack(">I", raw[i:i + 4])[0]
+        kind = raw[i + 4:i + 8]
+        if kind == b"IDAT":
+            idat += raw[i + 8:i + 8 + n]
+        i += 12 + n
+    stride = make_icon.SIZE * 3
+    lines = zlib.decompress(idat)
+    got = b"".join(lines[j + 1:j + 1 + stride]
+                   for j in range(0, len(lines), stride + 1))
+    assert got == make_icon.pixels(), \
+        "web/icon-180.png is not what src/make_icon.py draws"
 
 
 @pytest.mark.parametrize("name", ["index.html", "app.js", "model.json", "model.js",
-                                  "stats.json"])
+                                  "icon-180.png"])
 def test_a_missing_artifact_is_caught(origin, name):
     (origin / name).unlink()
     assert [(a.name, s) for a, s in publish.check()] == [(name, "missing")]

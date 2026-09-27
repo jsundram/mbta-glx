@@ -345,14 +345,23 @@ ALLOWED_HOSTS = {
     # CORS, so a browser cannot read them at all; this host parses that feed and
     # serves the ~10 trip ids for one stop. Reachable only inside the tailnet, and
     # the board degrades to an empty skip set whenever it is not.
-    "mini.tail8b0808.ts.net": "the skip set a browser cannot fetch; tailnet only",
+    "mini.tail8b0808.ts.net": ("the three things a browser cannot fetch -- the skip "
+                               "set, the archiver's heartbeat, and today's score; "
+                               "tailnet only, and the board degrades without it"),
 }
+
+
+# An XML namespace is an identifier, not an address: nothing dereferences
+# xmlns="http://www.w3.org/2000/svg", and the inline SVG favicon carries one. Letting
+# it into ALLOWED_HOSTS would mean that list no longer answers "what does the board
+# talk to", which is the only question it exists to answer.
+_XMLNS = re.compile(r"""xmlns(:\w+)?=['"][^'"]*['"]""")
 
 
 def _board_source() -> str:
     """Everything served from the origin. proof.html was missed and fetches MBTA."""
-    return "\n".join(p.read_text() for p in
-                     sorted(WEB_DIR.glob("*.js")) + sorted(WEB_DIR.glob("*.html")))
+    return _XMLNS.sub("", "\n".join(p.read_text() for p in
+                      sorted(WEB_DIR.glob("*.js")) + sorted(WEB_DIR.glob("*.html"))))
 
 
 def test_the_board_reaches_no_host_it_has_no_reason_to():

@@ -46,9 +46,11 @@ LIVE = ROOT / "data" / "live"
 PAIRS = ROOT / "data" / "pairs"
 SCORES = ROOT / "data" / "scores.jsonl"
 OUT = ROOT / "data" / "stats.json"
-# The static board fetches stats.json as a sibling asset. Same reasoning as
-# model.json in fit.py: an artifact that stops at data/ never reaches the rider.
-WEB_OUT = ROOT / "web" / "stats.json"
+# No web/ copy any more. The board's panel asks the backend how trains have run
+# TODAY, which is a question a published file cannot answer: this is written from
+# CLOSED days, and the board is served from Pages, so nothing computed here during
+# the day could ever reach it. This file stays as the project's own record -- the
+# scoreboard behind data/scores.jsonl, which outlives the pruned archive.
 
 MAGOUN_IN = "70508"
 # Predictions past 20 min are not predictions, they are mispairs. rollup pairs each
@@ -238,8 +240,7 @@ def main() -> None:
         print("no closed day has been scored yet; not writing stats.json")
         return
     OUT.write_text(json.dumps(stats))
-    WEB_OUT.write_text(OUT.read_text())
-    print(f"wrote {OUT} and {WEB_OUT}")
+    print(f"wrote {OUT}")
     print(f"  {stats['window_days']}d to {stats['as_of']}: "
           f"caught {stats['caught']}/{stats['of']}")
     print(f"  platform wait  {stats['mean_platform_wait_s'] / 60:5.1f} min")

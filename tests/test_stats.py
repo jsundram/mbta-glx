@@ -1,9 +1,17 @@
-"""Pin stats.json to the board that reads it, and to arithmetic that must not drift.
+"""Pin the self-score panel to the numbers behind it, and to arithmetic that must
+not drift.
 
-The panel degrades quietly by design -- `history()` hides it on any throw -- so a
-renamed field does not fail, it shows an empty box. That is the failure this file
-exists to catch, from both sides: every name index.html reads has to be in the
-published file, and the file has to carry nothing less than the contract.
+The panel degrades quietly by design -- it hides itself on any throw -- so a renamed
+field does not fail, it shows nothing. That is the failure this file exists to catch,
+from both sides: every name index.html reads has to be in the payload, and the
+payload has to carry nothing less than the contract.
+
+It used to pin web/stats.json, which the panel fetched as a sibling asset. The panel
+asks the backend for TODAY now, because a published file cannot answer that question:
+stats.json is written from CLOSED days and the board is served from Pages, so nothing
+computed on the Mac during the day can reach it. data/stats.json is still the
+project's record and is still checked below; it is simply no longer what the rider
+reads.
 """
 import json
 import pathlib
@@ -15,79 +23,133 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 
+import server  # noqa: E402
 import stats  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
 BOARD = WEB / "index.html"
 
-# architecture.md 2, the published contract. Extra keys are fine (invariant 5:
-# schema changes are additive); missing ones are not.
+# architecture.md 2, the published contract for data/stats.json -- the record, not
+# the panel. Extra keys are fine (invariant 5: schema changes are additive).
 CONTRACT = {"as_of", "window_days", "caught", "of", "mean_platform_wait_s",
             "mean_door_to_train_s", "by_lead"}
 BIN_CONTRACT = {"bin", "n", "p10", "p50", "p90"}
 
 
-def _history_source() -> str:
-    """The body of index.html's history(), which is the only reader of stats.json."""
+def _panel_source() -> str:
+    """The body of index.html's todayPanel(), which is the only reader of /today."""
     src = BOARD.read_text()
-    i = src.index("async function history()")
+    i = src.index("async function todayPanel()")
     # The function is at top level, so the first line-initial "}" closes it.
     j = src.index("\n}", i)
     return src[i:j]
 
 
-def _fields_read(var: str) -> set[str]:
-    return set(re.findall(rf"\b{var}\.(\w+)", _history_source()))
+def _scored(arrival, predicted, *, caught=True, wait=60.0):
+    """One replay.score row, in the shape today_summary reads."""
+    return {"told": arrival - 600, "arrival": arrival, "predicted": predicted,
+            "caught": caught, "wait_s": wait}
 
 
-def test_board_reads_stats_json_by_fetch():
-    """If the board stops fetching it, this whole file is pinning nothing."""
-    assert 'fetch("stats.json"' in _history_source()
+def test_the_panel_asks_the_backend_for_today():
+    """If it stops fetching /today, the pin below is pinning nothing."""
+    src = _panel_source()
+    assert "/today?walk=" in src, "the panel no longer asks for today"
+    assert "Magoun.backendURL()" in src, \
+        "the panel invented its own copy of the backend host"
 
 
-def test_every_field_the_board_reads_is_published():
+def test_every_field_the_panel_reads_is_in_the_payload():
     """The two-sided pin: rename a field on either side and this fails.
 
     Keyed off index.html itself rather than a list typed twice, so the test cannot
-    agree with a stale copy of the contract.
+    quietly agree with a stale copy of the contract.
     """
-    want = _fields_read("d")
-    assert len(want) >= 7, f"failed to parse history(); got only {want}"
-    got = set(json.loads((WEB / "stats.json").read_text()))
-    assert want <= got, f"index.html reads fields stats.json does not have: {sorted(want - got)}"
+    want = set(re.findall(r"\bd\.(\w+)", _panel_source()))
+    assert len(want) >= 7, f"failed to parse todayPanel(); got only {want}"
+    got = set(server.today_summary([], "2026-09-27", 390, 0.0))
+    assert want <= got, \
+        f"the panel reads fields /today does not send: {sorted(want - got)}"
 
 
-def test_every_bin_field_the_board_reads_is_published():
-    want = _fields_read("b")
-    assert len(want) >= 5, f"failed to parse the by_lead loop; got only {want}"
-    bins = json.loads((WEB / "stats.json").read_text())["by_lead"]
-    assert bins, "no lead bins published"
-    for b in bins:
-        assert want <= set(b), f"bin {b.get('bin')} is missing {sorted(want - set(b))}"
+def test_the_panel_hides_itself_below_a_handful_of_trains():
+    """A percentage of two trains is a rounding artifact, not a measurement."""
+    src = _panel_source()
+    assert "min_trains" in src and "hidden = true" in src
+    assert server.TODAY_MIN_TRAINS >= 3
+
+
+def test_the_three_buckets_partition_the_trains():
+    """early + close + late == trains, at any threshold. A rider reading three
+    percentages that do not add up has been handed a different question's answer."""
+    # Deliberately lopsided, and on the boundaries: |err| == close_s is "close",
+    # one second past it is not. A symmetric fixture would pass with the early and
+    # late buckets swapped, which is the mistake that matters -- err is
+    # arrival - predicted, so a train that came BEFORE the quoted time has a
+    # NEGATIVE err, and getting that backwards files the dangerous trains under the
+    # reassuring word.
+    rows = [_scored(2000, 2000 + 300),                             # 300 s early
+            _scored(3000, 3000),                                   # dead on
+            _scored(6000, 6000 - 120), _scored(7000, 7000 + 120),  # exactly at the edge
+            _scored(1000, 1000 - 300), _scored(4000, 4000 - 121)]  # late, and just over
+    d = server.today_summary(rows, "2026-09-27", 390, 1.0)
+    assert d["trains"] == len(rows) == d["early"] + d["close"] + d["late"]
+    assert (d["early"], d["close"], d["late"]) == (1, 3, 2)
+
+
+def test_a_row_the_board_never_spoke_about_is_not_scored():
+    """`told is None` is an arrival with no prediction and no slot: the board said
+    nothing, so it is not evidence about what the board said."""
+    rows = [_scored(1000, 1000), {"told": None, "arrival": 2000, "predicted": None,
+                               "caught": False, "wait_s": None}]
+    assert server.today_summary(rows, "2026-09-27", 390, 1.0)["trains"] == 1
+
+
+def test_the_median_wait_is_over_the_trains_that_were_caught():
+    """A missed train has a negative wait; mixing those in makes a bad morning
+    produce a small reassuring median."""
+    rows = [_scored(1000, 1000, caught=True, wait=120.0),
+            _scored(2000, 2000, caught=True, wait=180.0),
+            _scored(3000, 3000, caught=False, wait=-600.0)]
+    d = server.today_summary(rows, "2026-09-27", 390, 1.0)
+    assert d["caught"] == 2 and d["median_wait_s"] == 150
+    assert server.today_summary([], "2026-09-27", 390, 1.0)["median_wait_s"] is None
+
+
+def test_the_payload_states_the_threshold_it_measured_against():
+    """The board prints "within N min" from this, rather than restating 120."""
+    d = server.today_summary([], "2026-09-27", 390, 0.0)
+    assert d["close_s"] == server.TODAY_CLOSE_S
+    assert "close_s" in _panel_source(), "the board hardcodes the threshold"
+
+
+def test_a_holed_capture_is_reported_not_swallowed():
+    """Arrivals are STOPPED_AT transitions, so a minute of missing snapshots loses
+    whole trains -- and the score then comes out worse than the day really was."""
+    d = server.today_summary([], "2026-09-27", 390, 1.0, gaps=(900, 600))
+    assert (d["gap_s"], d["max_gap_s"]) == (900, 600)
+    assert "gap_s" in _panel_source(), "the board never mentions a holed record"
 
 
 def test_published_stats_satisfies_the_contract():
-    d = json.loads((WEB / "stats.json").read_text())
+    d = json.loads((ROOT / "data" / "stats.json").read_text())
     assert CONTRACT <= set(d), f"stats.json is missing {sorted(CONTRACT - set(d))}"
     for b in d["by_lead"]:
         assert BIN_CONTRACT <= set(b)
+        assert b["p10"] <= b["p50"] <= b["p90"], b
+        assert b["n"] > 0
     assert d["of"] >= d["caught"] >= 0
     assert d["window_days"] >= 1
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", d["as_of"])
 
 
-def test_web_stats_matches_data_stats():
-    """Same guard as web/model.json: a stale published copy is a silent fork."""
-    assert json.loads((WEB / "stats.json").read_text()) == \
-        json.loads((ROOT / "data" / "stats.json").read_text()), \
-        "web/stats.json is out of date: re-run src/stats.py"
-
-
-def test_quantiles_are_ordered_and_binned_by_lead():
-    for b in json.loads((WEB / "stats.json").read_text())["by_lead"]:
-        assert b["p10"] <= b["p50"] <= b["p90"], b
-        assert b["n"] > 0
+def test_the_record_is_not_published_to_the_origin():
+    """It is nobody's asset now. A file in web/ that nothing fetches goes stale
+    there with every test still green, because no test has a reason to read it."""
+    assert not (WEB / "stats.json").exists(), \
+        "web/stats.json is back; the panel does not read it"
+    assert "stats.json" not in {a.name for a in __import__("publish").MANIFEST}
 
 
 # ---- the aggregation, on synthetic days so the arithmetic is checkable ----
@@ -124,17 +186,6 @@ def test_window_takes_the_last_n_days_and_reports_what_it_used():
     # Fewer scored days than the window is not an error; it is a young scoreboard.
     d = stats.build({k: scores[k] for k in list(scores)[:3]}, 7)
     assert d["window_days"] == 3
-
-
-def test_the_board_decodes_the_absent_sentinel():
-    """-1 only helps if the reader knows what it means.
-
-    `(x/60).toFixed(1)` renders -1 as "-0.0 min", which reads as a real measurement
-    of almost nothing rather than as no data. The panel has to branch on it.
-    """
-    src = _history_source()
-    assert "< 0" in src or "<0" in src, \
-        "history() does not guard the negative sentinel; -1 renders as -0.0 min"
 
 
 def test_a_day_with_no_riders_reports_absent_not_zero():

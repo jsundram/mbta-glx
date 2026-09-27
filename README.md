@@ -238,8 +238,11 @@ residual risk and what the "unconfirmed" flag is for.
 
 ## How it has been doing
 
-The board scores itself daily and publishes the result as `stats.json`; the panel on
-the board is that file. Two questions, kept apart because they are not the same one:
+The board scores itself daily into `data/stats.json`. That file is the project's
+record, not the panel: the panel asks the backend's `/today`, because "how have
+trains been running today" is a question a file written from *closed* days and
+served from Pages cannot answer. Two questions, kept apart because they are not the
+same one:
 
 - **Coverage** — of the trains that actually came, how many did the app announce
   early enough to be standing on the platform for? `src/replay.py`, one rider per
@@ -275,7 +278,9 @@ the 90-day prune of the archive it was computed from.
 | `src/simulate.py` | replay an archived day, score competing strategies |
 | `src/q.sh` | ad-hoc SQL over the archive (DuckDB); replaces `zcat \| grep` |
 | `src/replay.py` | score the last N trains against the leave-now advice |
-| `src/stats.py` | score closed days into `data/scores.jsonl` → `stats.json` |
+| `src/stats.py` | score closed days into `data/scores.jsonl` → `data/stats.json` |
+| `src/server.py` | the three things a browser cannot fetch: `/skips`, `/capture`, `/today` |
+| `src/make_icon.py` | draw `web/icon-180.png`; iOS will not take an SVG for a home-screen icon |
 | `src/publish.py` | move the published set to the static origin; refuse a partial one |
 | `src/refit.sh`, `src/refit.py` | a deliberate refit, and the diffs to read before accepting it |
 | `src/rating.py` | watch for the schedule rating change that resets every constant |

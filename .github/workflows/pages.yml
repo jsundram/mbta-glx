@@ -1,9 +1,11 @@
 # Serve web/ as the static origin.
 #
 # web/ is uploaded as-is, so there is no docs/ copy of index.html or app.js to fall
-# behind. The artifacts it serves -- model.json, model.js, stats.json -- are written
-# by fit.py and stats.py on the capture host and committed from there; this only
-# deploys what is in the commit.
+# behind. The artifacts it serves -- model.json, model.js, icon-180.png -- are
+# written by fit.py and make_icon.py on the capture host and committed from there;
+# this only deploys what is in the commit. data/stats.json is NOT among them any
+# more: the self-score panel asks the backend's /today, so a daily rescore changes
+# nothing in the origin and must not spend a deploy.
 #
 # publish.py --check runs first and fails the deploy on an incomplete origin. That is
 # the point of the gate: a refit that published data/model.json and forgot
@@ -26,7 +28,6 @@ on:
     paths:
       - "web/**"
       - "data/model.json"
-      - "data/stats.json"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
