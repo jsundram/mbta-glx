@@ -42,20 +42,30 @@ exposed=$(awk '/^BROWSER_ROUTES = \{/{f=1;next} f&&/^\}/{f=0} f' src/server.py \
           | sed -n 's|.*"\(/[a-z]*\)".*|\1|p' | sort -u)
 private=$(sed -n 's|.*u\.path == "\(/[a-z]*\)".*|\1|p' src/server.py | sort -u \
           | grep -vxF "$exposed" || true)
+pub=$(sed -n 's|^PUBLIC_PORT = \([0-9]*\).*|\1|p' src/server.py)
 for p in $exposed; do
-  code=$(curl -s -o /dev/null --max-time 6 -w '%{http_code}' "http://127.0.0.1:8723$p")
-  [ "$code" = 200 ] && ok "localhost:8723$p" || bad "localhost:8723$p -> HTTP $code"
+  code=$(curl -s -o /dev/null --max-time 6 -w '%{http_code}' "http://127.0.0.1:$pub$p")
+  [ "$code" = 200 ] && ok "localhost:$pub$p" || bad "localhost:$pub$p -> HTTP $code"
+done
+# The split, checked from the inside. Each private route must be alive on the
+# private port and absent from the public one -- that is the property, and it is now
+# a property of this process rather than of which paths somebody remembered to mount.
+for p in $private; do
+  [ "$p" = "/api" ] && continue   # it calls MBTA; costs a request and can 503 honestly
+  priv=$(curl -s -o /dev/null --max-time 6 -w '%{http_code}' "http://127.0.0.1:8723$p")
+  publ=$(curl -s -o /dev/null --max-time 6 -w '%{http_code}' "http://127.0.0.1:$pub$p")
+  [ "$priv" = 200 ] && [ "$publ" = 404 ] \
+    && ok "$p is private (8723 $priv, $pub $publ)" \
+    || bad "$p: 8723 says $priv, public port says $publ -- the split is not holding"
 done
 if [ -n "$base" ]; then
   for p in $exposed; do
     code=$(curl -s -o /dev/null --max-time 10 -w '%{http_code}' "$base$p")
     [ "$code" = 200 ] && ok "$base$p" || bad "$base$p -> HTTP $code (tailscale serve?)"
   done
-  # The line that keeps the board static: only the allowlisted ones may be reachable.
-  # These 404 because `/` on this hostname is mounted to another app (port 8770)
-  # and that app does not have them -- not because Tailscale refuses an unmapped
-  # path. Same verdict, different reason: if that app ever grew a /status, this
-  # would go BAD without the board's backend having leaked anything.
+  # And from the outside. These 404 because the public port does not have them, not
+  # because some other app on that hostname happens not to -- which is what this
+  # checked before the board's origin moved onto a port of its own.
   for p in $private; do
     code=$(curl -s -o /dev/null --max-time 10 -w '%{http_code}' "$base$p")
     [ "$code" = 404 ] && ok "$base$p is NOT exposed" \

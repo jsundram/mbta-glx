@@ -272,6 +272,70 @@ def test_status_sh_checks_exactly_the_routes_the_server_allowlists():
     assert "for p in /skips" not in src, "status.sh still has a literal route list"
 
 
+# --- the public origin: the allowlist, enforced where a test can reach it ---
+
+@pytest.fixture
+def public():
+    """The public handler on its own port, as `tailscale serve` mounts it."""
+    srv = HTTPServer(("127.0.0.1", 0), server.PublicHandler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield srv.server_address[1]
+    srv.shutdown()
+
+
+def test_the_public_origin_serves_the_allowlist_and_nothing_else(public, live):
+    """The board's whole origin is this port, so BROWSER_ROUTES IS the surface.
+
+    It used to be enforced twice: here as the gate on the CORS header, and by
+    `tailscale serve` having one `--set-path` line per route. The second half was
+    invisible -- /api and /board are unreachable from the tailnet only because
+    nobody mounted them -- and it put the allowlist in a proxy config no test could
+    read. Worse, on a host serving several apps an unmapped path does not fail, it
+    falls through to whichever app owns `/` and 404s from there, which is
+    indistinguishable from a backend that is down.
+    """
+    for path in sorted(server.BROWSER_ROUTES):
+        status, headers, _ = get(public, path)
+        assert status == 200, f"{path} is allowlisted but answers {status}"
+        assert headers.get("Access-Control-Allow-Origin") == "*", path
+    for path in ("/api", "/status", "/board", "/history", "/", "/nope"):
+        status, headers, _ = get(public, path)
+        assert status == 404, (
+            f"{path} answers {status} on the public origin; it is not allowlisted, "
+            "and this port is the whole surface a browser can reach")
+        assert "Access-Control-Allow-Origin" not in headers, path
+
+
+def test_the_private_origin_still_has_the_routes_that_are_not_for_browsers(live):
+    """The split must not delete them -- /board and /api are how this is debugged."""
+    assert get(live, "/board")[0] == 200
+    assert get(live, "/nope")[0] == 404
+
+
+def test_a_new_allowlisted_route_needs_no_second_place_to_be_published():
+    """The point of the split: adding to BROWSER_ROUTES is the whole change.
+
+    Structural, because the failure it prevents is a route that exists, passes every
+    test, and is unreachable from the phone because nobody ran a proxy command.
+    """
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "src" / "server.py").read_text()
+    assert "class PublicHandler" in src
+    guard = src[src.index("class PublicHandler"):src.index('if __name__')]
+    assert "BROWSER_ROUTES" in guard, (
+        "the public handler does not consult the allowlist, so the two can drift")
+    # Prose about the old mechanism is fine; a line you could paste is not. A
+    # recipe STARTS with the command, after any comment marker.
+    recipes = [l for l in src.splitlines()
+               if l.strip().lstrip("#").strip().startswith("tailscale serve")
+               and "--set-path" in l]
+    assert not recipes, (
+        "server.py still tells you to mount routes one at a time:\n  "
+        + "\n  ".join(l.strip() for l in recipes)
+        + "\nthe public origin is mounted at a root; adding a route must not need "
+          "a proxy change")
+
+
 # --- today's score: the panel's only source, and it must never stall the board ---
 
 def test_today_answers_at_once_even_with_nothing_computed(live):

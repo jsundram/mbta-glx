@@ -288,6 +288,12 @@ def warm_today() -> None:
     threading.Thread(target=_refresh_today, args=(key,), daemon=True).start()
 
 
+# The board's whole origin, mounted at the root of its own port rather than as
+# paths on a shared one. Everything the browser may reach is here and nothing else
+# is, so BROWSER_ROUTES is enforced in one place that a test can reach -- not by the
+# absence of a line in a proxy config on another machine's terms.
+PUBLIC_PORT = 8724
+
 # How long the board may trust a skip set. Two of service.skipped_trips' own 30 s
 # cache cycles: long enough that an ordinary miss does not blank the strikethrough,
 # short enough that a dead upstream stops being quoted as fact.
@@ -441,16 +447,53 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+class PublicHandler(Handler):
+    """The same routes, on a second port that serves ONLY the allowlisted ones.
+
+    The allowlist was enforced twice: here, as the gate on the CORS header, and by
+    `tailscale serve` having one `--set-path` line per route and no others. That
+    second half was load-bearing and invisible. /api, /status, /board and /history
+    are unreachable from the tailnet only because nobody mounted them -- and every
+    new route needed a proxy change, in a place where a missing line does not look
+    like a missing line: an unmapped path falls through to whatever owns `/` on that
+    hostname, which on this host is a different application, so it 404s from
+    somewhere else and reads exactly like a backend that is down.
+
+    So the split moves into the process, where a test can see it. This port is the
+    board's whole origin and gets mounted at the root of its own; the private port
+    keeps the computed-rows routes that would end the static property if a browser
+    could reach them. Adding a route to BROWSER_ROUTES now changes what is public,
+    with no second place to remember and nothing to re-run on the proxy.
+    """
+
+    def do_GET(self):  # noqa: N802
+        if urlparse(self.path).path not in BROWSER_ROUTES:
+            # Deliberately indistinguishable from an unknown route: this origin's
+            # story is that it has the allowlist on it and nothing else exists.
+            return self._send(404, "text/plain", b"not found")
+        super().do_GET()
+
+
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8723
+    public = int(sys.argv[2]) if len(sys.argv) > 2 else PUBLIC_PORT
     print(f"Magoun inbound ETA service on http://localhost:{port}/?walk=6")
-    # Still localhost only. architecture.md 5 called for "a bind beyond 127.0.0.1"
+    # Both localhost only. architecture.md 5 called for "a bind beyond 127.0.0.1"
     # because it assumed the rider's devices would reach this directly; they reach
     # it through `tailscale serve`, which terminates TLS on the tailnet and proxies
     # to loopback. So the wider bind buys nothing and costs the LAN an open port.
     #
-    #   tailscale serve --bg --https 443 --set-path /skips   http://127.0.0.1:8723/skips
-    #   tailscale serve --bg --https 443 --set-path /capture http://127.0.0.1:8723/capture
-    #   tailscale serve --bg --https 443 --set-path /today   http://127.0.0.1:8723/today
+    # One mount, once, and never again as routes are added:
+    #
+    #   tailscale serve --bg --https 8443 http://127.0.0.1:8724
+    #
+    # The public port is a whole origin, so it is mounted at a root rather than a
+    # path. Paths on one hostname are how several apps end up sharing a namespace
+    # and answering for each other; a port each keeps them apart.
+    print(f"  public routes on http://localhost:{public} "
+          f"({', '.join(sorted(BROWSER_ROUTES))})")
     warm_today()
+    threading.Thread(
+        target=HTTPServer(("127.0.0.1", public), PublicHandler).serve_forever,
+        daemon=True).start()
     HTTPServer(("127.0.0.1", port), Handler).serve_forever()

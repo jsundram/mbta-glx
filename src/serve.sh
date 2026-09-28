@@ -14,5 +14,7 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 for f in ops/ntfy.env ops/secrets.env; do
   [ -f "$f" ] && set -a && . "$f" && set +a
 done
+# Two ports: the private one keeps /api and the board preview, the public one is
+# the board's whole origin and is the only thing `tailscale serve` mounts.
 exec uv run --quiet --with polars --with gtfs-realtime-bindings \
-    python src/server.py "${1:-8723}"
+    python src/server.py "${1:-8723}" "${2:-8724}"
