@@ -59,7 +59,8 @@ def _snapshots(paths):
         import archive
         import rollup
         if pathlib.Path(p).is_dir():
-            yield from archive.read(pathlib.Path(p))
+            # score() reads no other stop's predictions, so it need not decode them.
+            yield from archive.read(pathlib.Path(p), pred_stop=MAGOUN_IN)
             continue
         op = gzip.open if str(p).endswith(".gz") else open
         with op(p, "rt") as f:

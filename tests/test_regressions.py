@@ -328,6 +328,35 @@ def test_archive_drops_entities_that_leave_the_feed():
     assert [len(s["vehicles"]) for s in back] == [1, 0, 1]
 
 
+def test_reading_one_stop_is_the_full_read_with_the_rest_removed():
+    """`pred_stop` is what keeps /history under a second, so it must be exact.
+
+    The filter runs on encoded delta rows, before they are rebuilt. That is only
+    sound because a key never changes stop -- if the key ever stopped carrying the
+    stop, a filtered read would rebuild from partial deltas and quietly differ.
+    """
+    import archive
+    import tempfile, pathlib
+    def p(stop, trip, arr, veh):
+        return {"stop": stop, "trip": trip, "route": "Green-E", "dir": 0,
+                "veh": veh, "seq": 6, "arr": arr, "dep": None, "unc": None, "rel": 0}
+    veh = {"id": "G-1", "route": "Green-E", "trip": "t1", "dir": 0,
+           "stop": "70510", "status": "STOPPED_AT", "seq": 5, "ts": 1}
+    snaps = [{"t": 1.0, "preds": [p("70508", "t1", 100, "G-1"),
+                                  p("70510", "t1", 50, "G-1")], "vehicles": [veh]},
+             {"t": 16.0, "preds": [p("70508", "t1", 110, None),
+                                   p("705081", "t2", 70, "G-2")], "vehicles": []},
+             {"t": 31.0, "preds": [p("70508", "t1", 120, "G-1")], "vehicles": [veh]}]
+    with tempfile.TemporaryDirectory() as d:
+        archive.write(snaps, pathlib.Path(d) / "day=x")
+        full = list(archive.read(pathlib.Path(d) / "day=x"))
+        one = list(archive.read(pathlib.Path(d) / "day=x", pred_stop="70508"))
+    # "705081" shares a prefix with "70508": the separator is what keeps it out.
+    assert one == [{**s, "preds": [q for q in s["preds"] if q["stop"] == "70508"]}
+                   for s in full]
+    assert [q["veh"] for s in one for q in s["preds"]] == ["G-1", None, "G-1"]
+
+
 # --- the static property: the backend serves only what a browser cannot fetch ---
 #
 # architecture.md 3: the board computes its own rows from model.json and asks the

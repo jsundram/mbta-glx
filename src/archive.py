@@ -102,10 +102,20 @@ def write(snaps: list[dict], dest: pathlib.Path) -> pathlib.Path:
     return dest
 
 
-def read(src: pathlib.Path) -> Iterator[dict]:
-    """Rebuild full snapshots. Inverse of write()."""
+def read(src: pathlib.Path, pred_stop: str | None = None) -> Iterator[dict]:
+    """Rebuild full snapshots. Inverse of write().
+
+    `pred_stop` keeps only that stop's predictions; vehicles are always whole. It
+    is exact, not a sample: the key is `stop|trip`, so a key never changes stop and
+    each key's deltas rebuild without reference to any other key. It exists
+    because one stop is 0.3% of a day's prediction rows (3,952 of 1,244,816 on
+    2026-10-06), and decoding the rest into dicts was ~4 of /history's 10 s.
+    """
     meta = json.loads((src / "meta.json").read_text())
-    dp = _decode(pl.read_parquet(src / "preds.parquet"), PF, OFFSET_P, None)
+    preds = pl.read_parquet(src / "preds.parquet")
+    if pred_stop is not None:
+        preds = preds.filter(pl.col("key").str.starts_with(f"{pred_stop}|"))
+    dp = _decode(preds, PF, OFFSET_P, None)
     dv = _decode(pl.read_parquet(src / "vehicles.parquet"), VF, OFFSET_V, "id")
     alerts = {a["t"]: json.loads(a["alerts"]) for a in meta["alerts"]}
     cp: dict[str, dict] = {}
