@@ -285,7 +285,7 @@ the 90-day prune of the archive it was computed from.
 | `src/refit.sh`, `src/refit.py` | a deliberate refit, and the diffs to read before accepting it |
 | `src/rating.py` | watch for the schedule rating change that resets every constant |
 | `.github/workflows/` | suite + weekly drift, Pages deploy, rating watch |
-| `src/snapshot_schedule.py` | capture each day's schedule before the API drops it |
+| `src/snapshot_schedule.py` | capture each day's schedule, and that day's trip → block map, before the API drops them |
 | `src/daily.sh`, `ops/` | launchd agents for the archiver and daily maintenance |
 | `src/record_live.py` | older v3-API recorder, superseded by `record_rt.py` |
 | `src/fetch_schedules.py` | one-shot schedule pull, superseded by `snapshot_schedule.py` |
