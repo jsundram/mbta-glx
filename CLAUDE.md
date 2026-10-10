@@ -53,8 +53,8 @@ that is the only way the rider's phone reaches the backend.
 
 | agent | what it does | dies quietly? |
 |---|---|---|
-| `com.magoun.archiver` | `record_rt.py`, appends every 15 s | **yes** — an un-captured day is gone; `/capture` and the board's footer exist for this |
-| `com.magoun.server` | `serve.sh` → `server.py` on 127.0.0.1:8723 | yes — the board degrades to an empty skip set |
+| `com.magoun.archiver` | `record.sh` → `record_rt.py`, appends every 15 s | **yes** — an un-captured day is gone; `/capture` and the board's footer exist for this |
+| `com.magoun.server` | `serve.sh` → `server.py` on 127.0.0.1:8723 (private) and :8724 (public) | yes — the board degrades to an empty skip set |
 | `com.magoun.watch` | `watch.sh` → the notifier | yes — no push, no error |
 | `com.magoun.daily` | `daily.sh`, scheduled | no — it leaves a log |
 
@@ -250,6 +250,13 @@ without anyone noticing.
 
 ## Gotchas that cost real time
 
+- **A KeepAlive agent must never start with `uv run`.** The `uv run` parent lives
+  as long as its child and holds `~/.cache/uv/.lock`, so `uv cache clean` waited on
+  three agents for two weeks — and `--force` would have deleted the packages a
+  `--with` environment imports from the cache. The agents run
+  `~/.local/share/magoun/venv` (`ops/venv.sh`, built from `ops/requirements.txt` by
+  `install.sh`). Adding a dependency to an agent means `ops/requirements.in`, not a
+  `--with`. README, "The agents' environment".
 - `launchctl bootout` is **asynchronous**; bootstrapping too soon fails with
   `5: Input/output error` and leaves the agent stopped.
 - ntfy rejects `?since=now` with **HTTP 400**; subscribe with no `since`. Its

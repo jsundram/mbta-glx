@@ -33,6 +33,23 @@ if ! launchctl print "$DOMAIN" >/dev/null 2>&1; then
   exit 1
 fi
 
+# The agents' own environment (ops/venv.sh says why it is not `uv run`). Built
+# before any agent is touched, so a failed build -- no network, a bad pin -- leaves
+# the running agents running instead of restarting them onto nothing. A sync that
+# has nothing to change touches no files.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+. ./venv.sh
+if [ ! -x "$PY" ] && ! uv venv --quiet --python 3.14 "$MAGOUN_VENV"; then
+  echo "error: could not create $MAGOUN_VENV; no agent was touched." >&2
+  exit 1
+fi
+if ! uv pip sync --quiet --link-mode clone --python "$PY" requirements.txt; then
+  echo "error: could not install ops/requirements.txt into $MAGOUN_VENV;" >&2
+  echo "no agent was touched." >&2
+  exit 1
+fi
+echo "env   $MAGOUN_VENV"
+
 mkdir -p "$HOME/Library/LaunchAgents"
 fail=0
 for p in "${AGENTS[@]}"; do

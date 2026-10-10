@@ -114,8 +114,9 @@ Set `MBTA_API_KEY` (free, from api-v3.mbta.com) to lift the keyless rate limit.
 3. Test the channel: `./src/watch.sh` is the runtime; for a one-off check run
    `set -a && . ops/secrets.env && set +a && uv run python src/notify.py`.
 4. Install the agents: `./ops/install.sh` — the archiver, the backend, the
-   notifier and the daily job. Then `./ops/status.sh` to see all four running,
-   how fresh the archive is, and whether the endpoints answer.
+   notifier and the daily job. It first builds their Python environment (see
+   [The agents' environment](#the-agents-environment)). Then `./ops/status.sh` to
+   see all four running, how fresh the archive is, and whether the endpoints answer.
 
 **Daily use** — tell it where you need to be, then answer the notifications:
 
@@ -153,6 +154,41 @@ It runs on this Mac for now, under `caffeinate` inside the launchd job. A lid cl
 still stops it; a tick that comes back late checks whether the walk still fits
 before telling you to leave, so the failure is a missed nudge rather than a wrong
 one.
+
+## The agents' environment
+
+The three always-on agents — archiver, backend, notifier — do **not** start with
+`uv run`. They used to, and it kept the uv cache locked for weeks.
+
+**The problem.** A `uv run` process doesn't hand over to Python. It stays alive as
+the parent for as long as the script runs, holding a shared lock on
+`~/.cache/uv/.lock`. `uv cache clean` and `uv cache prune` need that lock to
+themselves, so with the agents up they wait forever. Two things made it worse:
+
+- `--force` isn't a way out. A `uv run --with ...` environment imports its
+  packages straight out of `~/.cache/uv/archive-v0`, so clearing the cache deletes
+  files the agents are running from.
+- Killing the processes doesn't free it either. launchd restarts each agent
+  within 30 s, onto the same lock.
+
+**The fix.** The agents get their own environment, outside the cache:
+
+- `ops/requirements.in` lists what they import; `ops/requirements.txt` pins it
+  (recompile with the command in its header).
+- `./ops/install.sh` builds it at `~/.local/share/magoun/venv` (`ops/venv.sh`;
+  override with `MAGOUN_VENV`). It uses `--link-mode clone`, so every file is an
+  independent copy-on-write copy that a cache clean can't reach. It's outside the
+  repo because the repo is in Dropbox.
+- `src/record.sh`, `src/serve.sh` and `src/watch.sh` run that environment's
+  `python` directly, so no uv process outlives the install.
+
+Scheduled and interactive commands (`daily.sh`, `q.sh`, the test suite) still use
+`uv run`. They finish and let go of the lock. `./ops/status.sh` names whatever
+holds it, and a test fails if a KeepAlive agent goes back to `uv run`.
+
+To change a dependency: edit `ops/requirements.in`, recompile, run
+`./ops/install.sh`. It builds the environment before touching any agent, so a
+failed install leaves the running ones alone.
 
 ## What the history says
 
@@ -287,6 +323,8 @@ the 90-day prune of the archive it was computed from.
 | `.github/workflows/` | suite + weekly drift, Pages deploy, rating watch |
 | `src/snapshot_schedule.py` | capture each day's schedule, and that day's trip → block map, before the API drops them |
 | `src/daily.sh`, `ops/` | launchd agents for the archiver and daily maintenance |
+| `src/record.sh`, `src/serve.sh`, `src/watch.sh` | launchers: run the agents' own Python, never `uv run` |
+| `ops/requirements.in`, `ops/requirements.txt`, `ops/venv.sh` | what the agents' environment holds, and where it lives |
 | `src/record_live.py` | older v3-API recorder, superseded by `record_rt.py` |
 | `src/fetch_schedules.py` | one-shot schedule pull, superseded by `snapshot_schedule.py` |
 | `src/backtest_berth.py` | where the berth tier's numbers came from; run by hand |

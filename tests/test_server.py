@@ -18,6 +18,7 @@ import inspect
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import threading
@@ -450,6 +451,19 @@ def test_the_stale_threshold_is_far_above_the_archivers_own_cadence():
 
 PROTOBUF_DEP = "gtfs-realtime-bindings"
 NEEDS_PROTOBUF = ("src/watch.py", "src/server.py", "tests/live_notifier.py")
+AGENT_PY = '"$PY"'      # a launcher running the agents' environment (ops/venv.sh)
+
+
+def _agent_requirements(root: pathlib.Path) -> set[str]:
+    """Top-level names in ops/requirements.in, checked against the compiled pins."""
+    names = {line.split("#")[0].strip()
+             for line in (root / "ops" / "requirements.in").read_text().splitlines()}
+    names.discard("")
+    pinned = (root / "ops" / "requirements.txt").read_text()
+    stale = [n for n in names if f"\n{n}==" not in f"\n{pinned}"]
+    assert not stale, (f"{stale} are in ops/requirements.in but not pinned in "
+                       "ops/requirements.txt -- recompile it (command in its header)")
+    return names
 
 
 def _commands(path: pathlib.Path):
@@ -477,6 +491,11 @@ def test_every_launcher_of_the_skip_path_installs_the_protobuf_library():
         for line in _commands(path):
             if not any(t in line for t in NEEDS_PROTOBUF):
                 continue
+            if AGENT_PY in line:
+                checked += 1  # its dependencies are ops/requirements.txt's
+                if PROTOBUF_DEP not in _agent_requirements(root):
+                    offenders.append(f"{path.relative_to(root)}: {line.strip()[:90]}")
+                continue
             if "uv run" not in line and path.suffix != ".plist":
                 continue          # prose mentioning the file, not launching it
             checked += 1
@@ -500,9 +519,62 @@ def test_the_server_launcher_carries_what_today_needs_to_read_the_archive():
     root = pathlib.Path(__file__).resolve().parent.parent
     launcher = (root / "src" / "serve.sh").read_text()
     assert "src/server.py" in launcher, "serve.sh no longer launches the server"
-    assert "--with polars" in launcher, (
-        "serve.sh launches the server without polars; src/archive.py and "
+    assert f"{AGENT_PY} src/server.py" in launcher, (
+        "serve.sh no longer runs the server in the agents' environment, so "
+        "ops/requirements.txt no longer says what it has")
+    assert "polars" in _agent_requirements(root), (
+        "the agents' environment has no polars; src/archive.py and "
         "src/rollup.py import it, so /today would answer an empty score forever")
+
+
+# --- an agent on `uv run` holds the uv cache for as long as it lives ---
+
+def test_no_long_running_agent_starts_under_uv_run():
+    """A `uv run` parent outlives nothing: it waits on its child, holding a shared
+    lock on ~/.cache/uv/.lock the whole time. Three KeepAlive agents held it for
+    two weeks, so `uv cache clean` waited forever, and `--force` would have deleted
+    the packages they import -- an ephemeral `--with` environment reads them
+    straight out of the cache. Killing them did not help either: launchd restarted
+    each one onto the same lock within 30 s.
+
+    So every KeepAlive agent -- its plist, and the launcher script it names --
+    must exec the agents' own python, never uv. Scheduled jobs (daily.sh) finish
+    and let go, and may use uv.
+    """
+    root = pathlib.Path(__file__).resolve().parent.parent
+    agents = [p for p in sorted(root.glob("ops/*.plist"))
+              if "<key>KeepAlive</key><true/>" in p.read_text()]
+    assert len(agents) >= 3, f"found only {[a.name for a in agents]}; vacuous"
+    offenders = []
+    for plist in agents:
+        flat = " ".join(plist.read_text().split())
+        progs = re.findall(r"<string>([^<]+)</string>", flat.split("ProgramArguments")[1]
+                           .split("</array>")[0])
+        if any(pathlib.Path(s).name == "uv" for s in progs):
+            offenders.append(f"{plist.name}: runs uv directly")
+            continue
+        script = pathlib.Path(progs[0])      # absolute in the plist; read the repo's
+        local = root / script.parent.name / script.name
+        body = local.read_text()
+        execs = [ln.strip() for ln in body.replace("\\\n", " ").splitlines()
+                 if ln.strip().startswith("exec ")]
+        if not execs or any("uv " in ln or AGENT_PY not in ln for ln in execs):
+            offenders.append(f"{plist.name} -> {local.relative_to(root)}: {execs}")
+    assert not offenders, (
+        "these agents would hold the uv cache lock for as long as they run:\n  "
+        + "\n  ".join(offenders))
+
+
+def test_the_agents_environment_lives_outside_the_repo():
+    """The repo is in Dropbox. A .venv beside it would sync every file of polars and
+    numpy, and would be the cache-shaped thing ops/venv.sh exists to get away from."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    text = (root / "ops" / "venv.sh").read_text()
+    default = re.search(r'MAGOUN_VENV="\$\{MAGOUN_VENV:-([^}]+)\}"', text).group(1)
+    assert default.startswith("$HOME/") and "Dropbox" not in default, default
+    assert "--link-mode clone" in (root / "ops" / "install.sh").read_text(), (
+        "install.sh must not link the environment's files into the uv cache; a "
+        "symlinked install dies with the next `uv cache clean`")
 
 
 # --- a key in a public repo is a key given away ---

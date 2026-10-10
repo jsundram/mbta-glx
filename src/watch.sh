@@ -21,11 +21,13 @@ done
 # run wherever the notifier moves next.
 CAF=""
 command -v caffeinate >/dev/null 2>&1 && CAF="caffeinate -i -s"
-# gtfs-realtime-bindings is not optional. service.skipped_trips imports
-# google.transit inside its try, so without it every skip lookup raises and is
-# swallowed as though cdn.mbta.com were down -- the notifier then never sees a
-# SKIPPED marker, never takes the act-at-once path, and waits out the 240 s
+# The agents' own environment, not `uv run` -- ops/venv.sh says why.
+# gtfs-realtime-bindings is in it and is not optional. service.skipped_trips
+# imports google.transit inside its try, so without it every skip lookup raises
+# and is swallowed as though cdn.mbta.com were down -- the notifier then never
+# sees a SKIPPED marker, never takes the act-at-once path, and waits out the 240 s
 # debounce on a train MBTA has already said is not stopping. Silent, and it was
 # silent from the first day this agent ran.
-exec $CAF uv run --quiet --with numpy --with gtfs-realtime-bindings \
-    python src/watch.py "$@"
+. ops/venv.sh
+[ -x "$PY" ] || { echo "no $PY -- run ./ops/install.sh" >&2; exit 1; }
+exec $CAF "$PY" src/watch.py "$@"

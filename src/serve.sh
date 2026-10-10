@@ -1,7 +1,7 @@
 #!/bin/bash
 # Run the backend with secrets from ops/ (never committed).
 #
-# The only reason this exists rather than the plist invoking uv directly: the
+# The only reason this exists rather than the plist invoking python directly: the
 # plist cannot carry MBTA_API_KEY without committing it. service.py reads the key
 # from the environment and sends it as x-api-key, which lifts this process off
 # the 20 requests/minute anonymous cap -- shared per IP, and one open board is
@@ -16,5 +16,9 @@ for f in ops/ntfy.env ops/secrets.env; do
 done
 # Two ports: the private one keeps /api and the board preview, the public one is
 # the board's whole origin and is the only thing `tailscale serve` mounts.
-exec uv run --quiet --with polars --with gtfs-realtime-bindings \
-    python src/server.py "${1:-8723}" "${2:-8724}"
+# The agents' own environment, not `uv run` -- ops/venv.sh says why. polars and
+# gtfs-realtime-bindings come from ops/requirements.txt: /today and /skips each
+# swallow a missing import and answer empty forever.
+. ops/venv.sh
+[ -x "$PY" ] || { echo "no $PY -- run ./ops/install.sh" >&2; exit 1; }
+exec "$PY" src/server.py "${1:-8723}" "${2:-8724}"

@@ -20,6 +20,18 @@ for p in com.magoun.archiver com.magoun.daily com.magoun.server com.magoun.watch
   else ok "$p (pid $pid)"; fi
 done
 
+echo "environment"
+. ops/venv.sh
+[ -x "$PY" ] && ok "agents run $PY" || bad "no $PY -- run ./ops/install.sh"
+# An agent left on `uv run` holds the cache lock for its whole life, and then
+# `uv cache clean` waits forever. A short-lived uv (daily.sh, q.sh) holds it too,
+# legitimately, so this names the holders rather than failing on them.
+if cache=$(uv cache dir 2>/dev/null); then
+  holders=$(lsof -t "$cache/.lock" 2>/dev/null | xargs -n1 ps -o etime=,command= -p 2>/dev/null)
+  [ -z "$holders" ] && ok "uv cache lock is free" \
+    || printf '  note uv cache lock held by:\n%s\n' "$(echo "$holders" | sed 's/^ */       /' | cut -c1-110)"
+fi
+
 echo "capture"
 newest=$(ls -t data/live/rt-*.jsonl.gz 2>/dev/null | head -1)
 if [ -z "$newest" ]; then bad "no archive file at all"

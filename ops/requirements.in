@@ -1,0 +1,13 @@
+# What the long-running agents import. Compiled to requirements.txt with
+#   uv pip compile ops/requirements.in -o ops/requirements.txt --python-version 3.14
+# and installed by ops/install.sh into the agents' own environment (ops/venv.sh).
+#
+# gtfs-realtime-bindings: the archiver, and the skip set in the server and the
+#   notifier. service.skipped_trips imports it inside a try, so without it every
+#   skip lookup is swallowed as though cdn.mbta.com were down.
+# polars: the server's /today replays the archive; _score_today swallows the
+#   ImportError and serves an empty summary forever.
+# numpy: the notifier's quantile arithmetic.
+gtfs-realtime-bindings
+polars
+numpy

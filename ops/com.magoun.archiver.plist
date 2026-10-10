@@ -3,13 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key><string>com.magoun.archiver</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/opt/homebrew/bin/uv</string>
-    <string>run</string><string>--quiet</string>
-    <string>--with</string><string>gtfs-realtime-bindings</string>
-    <string>python</string><string>src/record_rt.py</string>
-  </array>
+  <key>ProgramArguments</key><array><string>/Users/jsundram/Dropbox/Code/mbta-glx/src/record.sh</string></array>
   <key>WorkingDirectory</key><string>/Users/jsundram/Dropbox/Code/mbta-glx</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
