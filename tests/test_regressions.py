@@ -383,8 +383,10 @@ ALLOWED_HOSTS = {
 # An XML namespace is an identifier, not an address: nothing dereferences
 # xmlns="http://www.w3.org/2000/svg", and the inline SVG favicon carries one. Letting
 # it into ALLOWED_HOSTS would mean that list no longer answers "what does the board
-# talk to", which is the only question it exists to answer.
-_XMLNS = re.compile(r"""xmlns(:\w+)?=['"][^'"]*['"]""")
+# talk to", which is the only question it exists to answer. The same URI turns up
+# unquoted as the first argument to createElementNS, which figures.html draws its
+# marks with -- also an identifier, also dereferenced by nothing.
+_XMLNS = re.compile(r"""xmlns(:\w+)?=['"][^'"]*['"]|https?://www\.w3\.org/\S*?(?=['"])""")
 
 
 def _board_source() -> str:

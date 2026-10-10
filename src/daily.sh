@@ -22,6 +22,13 @@ uv run --quiet --with polars python src/rollup.py --compact --prune 90
 # window. The scoreboard is why the panel keeps its history after the prune above
 # deletes the archives it was computed from.
 uv run --quiet --with polars --with numpy python src/stats.py
+# LAMP publishes a day or two behind, so keep asking for the recent window rather
+# than only yesterday: a day this misses is a permanent hole in the heatmap.
+uv run --quiet python src/fetch_history.py \
+  "$(date -v-10d +%F 2>/dev/null || date -d '10 days ago' +%F)" "$(date +%F)"
+# Written to data/, served by the backend's /figures -- not published. Nothing in
+# the origin moves nightly, so this needs no commit and no push.
+uv run --quiet --with polars python src/figures.py
 echo "--- regression tests ---"
 uv run --quiet --with pytest --with numpy --with polars python -m pytest tests/ -q
 echo "--- static origin ---"

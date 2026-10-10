@@ -315,7 +315,7 @@ the 90-day prune of the archive it was computed from.
 | `src/q.sh` | ad-hoc SQL over the archive (DuckDB); replaces `zcat \| grep` |
 | `src/replay.py` | score the last N trains against the leave-now advice |
 | `src/stats.py` | score closed days into `data/scores.jsonl` → `data/stats.json` |
-| `src/server.py` | the three things a browser cannot fetch: `/skips`, `/capture`, `/today` |
+| `src/server.py` | the four things a browser cannot fetch: `/skips`, `/capture`, `/today`, `/figures` |
 | `src/make_icon.py` | draw `web/icon-180.png`; iOS will not take an SVG for a home-screen icon |
 | `src/publish.py` | move the published set to the static origin; refuse a partial one |
 | `src/refit.sh`, `src/refit.py` | a deliberate refit, and the diffs to read before accepting it |
@@ -331,6 +331,7 @@ the 90-day prune of the archive it was computed from.
 | `src/validate_live.py` | calibrate prediction error vs. lead time |
 | `src/service.py`, `src/server.py`, `src/ui.html` | the live service |
 | `web/index.html`, `web/app.js` | the same board with no backend; `app.js` ports `compute_rows` |
+| `src/figures.py`, `web/figures.html` | the archive drawn: a Marey diagram of the corridor and a lateness heatmap at Magoun; the data is the backend's `/figures`, rebuilt nightly, never committed |
 | `tests/run_cases.js`, `tests/board_smoke.py` | the JS side of the contract test; a browser check of the board |
 
 ## Historical feed archive: what exists

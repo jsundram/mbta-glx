@@ -79,7 +79,18 @@ BROWSER_ROUTES = {
     "/today": ("a browser cannot score today -- it needs the whole day's prediction "
                "stream and arrivals, which is the archive on this Mac, and the board "
                "has been open ten minutes; aggregates only, never computed rows"),
+    # A fourth, for web/figures.html. It was a published file, which meant a 250 KB
+    # commit and a push from this Mac every night for a page that only ever drew
+    # the archive -- and the archive is on this Mac. src/figures.py still writes it
+    # nightly (daily.sh); this hands the file over and computes nothing, so it costs
+    # the single-threaded server one read, never a replay.
+    "/figures": ("a browser cannot read the archive, and the figures are derived "
+                 "from it; a nightly file, served as written, never computed here"),
 }
+
+# What src/figures.py writes and /figures hands over. A module constant so a test
+# can point it somewhere without moving ROOT under /capture and /today.
+FIGURES = ROOT / "data" / "figures.json"
 
 # The archiver appends every 15 s, and the largest ordinary gap measured across a
 # 15-hour day was 18 s. Ten minutes is therefore not jitter -- it is asleep, dead
@@ -422,6 +433,14 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:  # noqa: BLE001
                 self._send(503, "application/json",
                            json.dumps({"error": str(e)}).encode())
+        elif u.path == "/figures":
+            # 503 when the file is missing, not an empty 200: a page with nothing to
+            # draw has to be able to say "no figures yet" rather than draw nothing.
+            try:
+                self._send(200, "application/json", FIGURES.read_bytes())
+            except OSError as e:
+                self._send(503, "application/json",
+                           json.dumps({"error": f"no figures: {e}"}).encode())
         elif u.path == "/board":
             self._send(200, "text/html; charset=utf-8",
                        (ROOT / "src" / "status.html").read_bytes())

@@ -44,7 +44,7 @@ def test_the_manifest_carries_all_three_refit_artifacts():
 
 
 def test_the_manifest_covers_every_asset_the_board_asks_for():
-    """Two-sided: add a fetched asset without adding it here and this fails.
+    """Two-sided: add a fetched asset to any page without adding it here and this fails.
 
     An asset the board requests but the origin never publishes is a 404 the board
     swallows -- a missing model.js falls back, and a missing icon is a home-screen
@@ -55,7 +55,11 @@ def test_the_manifest_covers_every_asset_the_board_asks_for():
     in model.json's constants, so it is another origin's problem and the filter
     below drops it. tests/test_regressions.py is what polices that host.
     """
-    src = (WEB / "index.html").read_text() + (WEB / "app.js").read_text()
+    # Every page in the origin, not just the board: web/figures.html loads model.js
+    # for the backend's address, and a second page is exactly where an unpublished
+    # asset would slip in unseen.
+    src = "\n".join(p.read_text() for p in
+                    sorted(WEB.glob("*.html")) + sorted(WEB.glob("*.js")))
     asked = set(re.findall(r'fetch\("([\w.-]+)"', src))
     asked |= set(re.findall(r'\.src = "([\w.-]+)"', src))
     # Markup too, not just fetches: the icon is a <link href>, and an unpublished

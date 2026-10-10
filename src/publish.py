@@ -93,7 +93,11 @@ MANIFEST = [
     Artifact("model.js", DATA / "model.json", script=True,
              why="the same bytes as a script, for file://"),
     Artifact("icon-180.png", why="the home-screen icon, for iOS"),
+    Artifact("figures.html", why="the archive, drawn"),
 ]
+# figures.json was here for a week, and it moved every night: a 250 KB commit and a
+# push from the capture host to republish a page about data that only exists on that
+# host. The backend's /figures serves it instead (server.BROWSER_ROUTES).
 # stats.json was here until the self-score panel started asking the backend for
 # TODAY instead. A published file nothing fetches is the same decoration as an
 # allowlist nothing consults: it would have gone stale in the origin with every

@@ -22,6 +22,9 @@ shape of the system and the order of work.
 │    ├─ fetch  <backend_url>/capture    is the archiver alive? │
 │    ├─ fetch  <backend_url>/today      how trains ran today  │
 │    └─ POST   ntfy.sh                  arm its own alerts   │
+│  figures.html                                              │
+│    ├─ <script> model.js               for backend_url      │
+│    └─ fetch  <backend_url>/figures    the archive, drawn   │
 └────────────────────────────────────────────────────────────┘
         ▲ published artifacts              ▲ scheduled push
 ┌─ BACKEND (Mac now, Pi/VPS later) ─────────────────────┐   │
@@ -30,8 +33,9 @@ shape of the system and the order of work.
 │  fit.py         refit per rating    → model.json       │   │
 │  stats.py       score closed days   → data/stats.json  │   │
 │  publish.py     move artifacts to the static origin    │   │
-│  server.py      /skips /capture /today -- the three     │   │
-│                 things a browser cannot get for itself │   │
+│  figures.py     draw the archive    → data/figures.json │   │
+│  server.py      /skips /capture /today /figures -- what │   │
+│                 a browser cannot get for itself        │   │
 │  watch.py       refine alerts, brief, recovery  ───────────┘
 └────────────────────────────────────────────────────────┘
 ```
@@ -160,6 +164,61 @@ Three properties it has to keep:
 - **A holed record is said out loud.** Arrivals are `STOPPED_AT` transitions, so a
   minute of missing snapshots loses whole trains and the day scores worse than it
   ran. `gap_s` carries it and the panel prints "N min not recorded".
+
+### `figures.json` — the archive, drawn
+
+```jsonc
+{ "as_of": 1790538000, "tz": "America/New_York",
+  "stops": [{"name": "Magoun Square", "in": "70508", "out": "70507",
+             "y": 181, "m": 1808}],
+  "magoun": 2,
+  "marey": {"days": [{"day": "2026-09-26",
+                      "runs":  [{"v": "G-10047", "r": "E", "d": 0,
+                                 "p": [0, 21900, 612, 1, 22620, 21, ...]}],
+                      "sched": [{"p": [0, 18000, 1, 18120, ...]}],
+                      "sched_stops": [0, 1, 2, 3, 4, 5, 6, 7]}]},
+  "heat": {"bin_s": 900, "stop": "70508", "max_dev_s": 1800,
+           "days": [{"day": "2026-09-23", "cells": [[20, 92, 2], ...],
+                     "n": 136, "added": 4, "dropped": 1, "p50": 82}],
+           "missing": ["2026-08-21", "2026-08-28"]} }
+```
+
+Three figures, one payload: the Marey diagram, the same runs collapsed onto a
+Magoun-aligned frame (every journey over every other, with a median and a
+10th-90th band per direction), and the heatmap. The first two read `marey`, so a
+new view of the corridor costs a function in the page and nothing in the pipeline.
+
+Times are **seconds after that day's local midnight**, so the page does no
+timezone arithmetic at all — the ZoneInfo conversion happens once, here.
+A Marey point is a triple: `station, arrival, dwell`. The dwell is what makes the
+terminus layover a flat step rather than a ten-minute-long first leg.
+
+**Two y axes, because they disagree by a factor of two.** `y` is the median
+observed running time to that station, net of dwell; `m` is cumulative metres,
+from platform coordinates cached in `data/ref/stops.json`. The GLX covers 5.4 km
+in 8.8 min and the downtown tunnel 2.6 km in the same 8.8 min -- 23 mph against
+11 -- so on `y` the tunnel takes half the picture and on `m` it is a sixth. On
+metres the slope IS the speed; on run time an ordinary train is a straight line by
+construction and an abnormal one visibly bends. Both are published and the page
+has a chip. `y` is also quantised: arrivals are 15-second samples, so every leg
+median lands on a 15 s step (61, 76, 91, 181 s) and a 60-second hop is
+resolved to about 12%.
+
+It reads two archives because they answer different halves. The Marey is
+`data/live`: 15-second resolution, arrivals as `STOPPED_AT` transitions, three
+days deep and growing, **Green-E only** unless `figures.py --routes` says
+otherwise. The heatmap is `data/raw` (LAMP): 35 days, one day behind,
+and the only source that carries the schedule each train was measured against.
+`fetch_history.py` runs nightly now for exactly that reason.
+
+**Served, not published.** It was published for its first week, on the argument
+that every day in it is already over. That was true and beside the point: the file
+changes every night, so publishing it meant a ~250 KB commit and a push from the
+capture host daily, for a page about an archive that only exists on that host. The
+backend's `/figures` now hands over `data/figures.json` as `figures.py` wrote it --
+a file read, no computation on the single-threaded request path. The cost is the
+same as `/today`'s: off the tailnet the page has nothing to draw, and says so.
+`--days` is the dial between history on the page and the size of each fetch.
 
 ### `stats.json` — the project's own record, written daily
 
@@ -327,6 +386,7 @@ manifest, each derived entry naming the file under `data/` it must equal:
 | `model.json` | `data/model.json` | fitted quantiles, fetched |
 | `model.js` | `data/model.json`, script-wrapped | a `file://` board cannot fetch a sibling file at all |
 | `icon-180.png` | — | drawn by `src/make_icon.py`; iOS will not take an SVG |
+| `figures.html` | — | the second page: the Marey and the heatmap (its data is the backend's `/figures`) |
 
 **A refit publishes three artifacts, not one.** A publisher carrying only
 `data/model.json` leaves the board predicting from the previous rating with nothing
@@ -620,7 +680,11 @@ and that is owed whenever M5 moves, Tailscale or not.
 
 **Live since 2026-09-26.** Two `--set-path` routes rather than serving `/`, so
 `/api` and the rest stay off the tailnet entirely — the static property is now
-enforced twice, by the CORS allowlist and by the proxy. One consequence found in
+enforced twice, by the CORS allowlist and by the proxy. *Superseded:* the server
+now listens on a second, public port (8724) that answers only `BROWSER_ROUTES`,
+mounted whole with `tailscale serve --bg --https 8443 http://127.0.0.1:8724`. The
+allowlist is enforced in one process a test can reach, and a new route needs no
+proxy change. One consequence found in
 use: the board is a *heavy* v3 client (~12.5 requests/min per open tab against an
 anonymous cap of 20 per client IP), and a home network puts every device behind
 one address. The backend is nearly idle by comparison. See CLAUDE.md's gotcha.

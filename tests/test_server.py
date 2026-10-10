@@ -244,6 +244,28 @@ def test_capture_is_reachable_cross_origin_and_is_on_the_allowlist(live):
     assert "/capture" in server.BROWSER_ROUTES
 
 
+# --- the figures: a nightly file, handed over as written ---
+
+def test_figures_serves_the_nightly_file_byte_for_byte(live, monkeypatch, tmp_path):
+    """No parse, no recompute: this server is single-threaded and shares its one
+    thread with /skips, so /figures must cost a file read and nothing more."""
+    body = json.dumps({"as_of": 1790000000, "marey": {"days": []}}).encode()
+    (tmp_path / "figures.json").write_bytes(body)
+    monkeypatch.setattr(server, "FIGURES", tmp_path / "figures.json")
+    status, headers, got = get(live, "/figures")
+    assert status == 200 and got == body
+    assert headers.get("Access-Control-Allow-Origin") == "*"
+
+
+def test_figures_says_it_has_none_rather_than_serving_an_empty_200(live, monkeypatch,
+                                                                    tmp_path):
+    """An empty answer draws an empty frame, which is the failure the page exists
+    to name. A 503 lets it say "no figures yet" instead."""
+    monkeypatch.setattr(server, "FIGURES", tmp_path / "absent.json")
+    status, headers, body = get(live, "/figures")
+    assert status == 503 and "no figures" in json.loads(body)["error"]
+
+
 def test_status_sh_checks_exactly_the_routes_the_server_allowlists():
     """ops/status.sh is the one command that says whether the deployment is healthy.
 
@@ -284,7 +306,8 @@ def public():
     srv.shutdown()
 
 
-def test_the_public_origin_serves_the_allowlist_and_nothing_else(public, live):
+def test_the_public_origin_serves_the_allowlist_and_nothing_else(public, live,
+                                                                monkeypatch, tmp_path):
     """The board's whole origin is this port, so BROWSER_ROUTES IS the surface.
 
     It used to be enforced twice: here as the gate on the CORS header, and by
@@ -295,6 +318,9 @@ def test_the_public_origin_serves_the_allowlist_and_nothing_else(public, live):
     falls through to whichever app owns `/` and 404s from there, which is
     indistinguishable from a backend that is down.
     """
+    # /figures hands over a nightly file, which a fresh checkout does not have.
+    (tmp_path / "figures.json").write_text("{}")
+    monkeypatch.setattr(server, "FIGURES", tmp_path / "figures.json")
     for path in sorted(server.BROWSER_ROUTES):
         status, headers, _ = get(public, path)
         assert status == 200, f"{path} is allowlisted but answers {status}"

@@ -15,3 +15,7 @@ __pycache__/
 ops/ntfy.env
 ops/secrets.env
 data/plan.json
+
+# Rebuilt nightly by src/figures.py and served by the backend at /figures; never
+# published, so never committed.
+data/figures.json

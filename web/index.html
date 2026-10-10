@@ -175,7 +175,8 @@
      .foot for the same reason .keyask is: paint() rebuilds that innerHTML every
      250 ms and an input inside it could never be typed into. */
   .setlink{background:none;border:0;padding:0;margin-top:10px;font:inherit;
-           font-size:12px;color:var(--dim);cursor:pointer;
+           font-size:12px;color:var(--dim);cursor:pointer;display:inline-block;
+           margin-right:14px;
            text-decoration:underline;text-decoration-style:dotted}
   .setlink:hover{color:var(--go)}
   .setlink:focus-visible{outline:2px solid var(--go);outline-offset:2px}
@@ -234,6 +235,10 @@
        alert is aimed off, where that alert goes, and a key for when MBTA is
        rate-limiting this address. The topic is one person's phone and the key is one
        person's quota, and this page is served from a public origin -- so none of it
+  <!-- Outside .foot for the same reason the settings link is: paint() rebuilds
+       that innerHTML every 250 ms. The figures are the archive rather than the
+       next train, so they are a link off the board, not a panel on it. -->
+  <a class="setlink" href="figures.html">how the line ran</a>
        is in the page, the repo or model.json. It is typed into this browser and
        stays there. -->
   <div class="panel" id="panel" hidden>

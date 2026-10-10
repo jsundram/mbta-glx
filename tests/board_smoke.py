@@ -23,11 +23,16 @@ The pin matters: playwright only drives the browser build it shipped with, and
 1.61.0 is the one matching the cached chromium-1228 / webkit-2311 on this Mac.
 """
 import argparse
+import contextlib
 import datetime as dt
+import functools
+import http.server
 import json
 import pathlib
 import re
+import socketserver
 import sys
+import threading
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -70,8 +75,22 @@ def schedule_body(slots) -> dict:
                      for t, tr in slots]}
 
 
+BACKEND_HOST = re.escape(
+    json.loads((ROOT / "web" / "model.json").read_text())
+    ["constants"]["backend_url"].split("/")[2])
+
+
 def stub(page, live):
-    """Serve one shifted fixture in place of every MBTA endpoint the board calls."""
+    """Serve one shifted fixture in place of every MBTA endpoint the board calls.
+
+    The backend is refused here, and a scenario that wants one routes it again
+    afterwards (playwright matches the most recent handler first). Without this
+    the check that the panel hides "with no backend answering" only passes when
+    the machine happens to be off the tailnet -- and fails on the one machine that
+    actually runs the backend, which is this one. Measured: /today answered with
+    85 trains and the panel, correctly, appeared.
+    """
+    page.route(re.compile(BACKEND_HOST), lambda r: r.abort())
     page.route(re.compile(r"api-v3\.mbta\.com/predictions"), lambda r: r.fulfill(
         json={"data": live["preds"]}, content_type="application/json"))
     page.route(re.compile(r"api-v3\.mbta\.com/vehicles"), lambda r: r.fulfill(
@@ -574,6 +593,126 @@ def upgrade_scenario(browser, check) -> None:
     page.close()
 
 
+@contextlib.contextmanager
+def _serve_web():
+    """web/ over HTTP on a free port, which is the shape Pages deploys.
+
+    Quiet has to be a subclass: setting .log_message on a functools.partial
+    succeeds silently and does nothing, because the partial is not the class.
+    """
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *a, **k):
+            pass
+
+    handler = functools.partial(Quiet, directory=str(ROOT / "web"))
+    with socketserver.TCPServer(("127.0.0.1", 0), handler) as httpd:
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            yield httpd.server_address[1]
+        finally:
+            httpd.shutdown()
+
+
+def figures_scenario(browser, check) -> None:
+    """web/figures.html: the second page in the origin, and the only one that
+    cannot degrade to something useful without its data.
+
+    It reads one file from the backend's /figures and draws every mark from it, so
+    the test is that marks exist -- an empty <svg> is what a silently broken scale
+    or an empty archive looks like, and neither raises. The backend is stood in for
+    with the real nightly file, data/figures.json. With the backend unreachable --
+    off the tailnet, which is normal -- the check is that the page SAYS so: an
+    unexplained empty frame is the failure this whole file exists to catch.
+    """
+    figs = ROOT / "data" / "figures.json"
+    if not figs.exists():
+        check("data/figures.json exists to stand in for /figures", False,
+              "run src/figures.py first")
+        return
+
+    def backend(route):
+        if route.request.url.split("?")[0].endswith("/figures"):
+            route.fulfill(status=200, body=figs.read_bytes(),
+                          headers={"Content-Type": "application/json",
+                                   "Access-Control-Allow-Origin": "*"})
+        else:
+            route.abort()
+
+    with _serve_web() as port:
+        page = browser.new_page()
+        errors = []
+        page.on("pageerror", lambda e: errors.append(str(e)[:200]))
+        page.route(re.compile(BACKEND_HOST), backend)
+        page.goto(f"http://127.0.0.1:{port}/figures.html")
+        page.wait_for_timeout(2500)
+        print(f"\n  the figures page over HTTP on {port}")
+        check("the figures page loads with no script error", not errors,
+              "; ".join(errors[:2]))
+        runs = page.eval_on_selector_all("#marey-plot polyline", "e => e.length")
+        check("the Marey draws trains", runs > 0, f"{runs} polylines")
+        cells = page.eval_on_selector_all("#heat-plot rect", "e => e.length")
+        check("the heatmap draws cells", cells > 0, f"{cells} cells")
+        # A window that draws every run in the day is a window control that is not
+        # doing anything, which is how the diagram went back to vertical spikes.
+        shown = page.inner_text("#marey-day")
+        page.get_by_role("button", name="all day").click()
+        page.wait_for_timeout(300)
+        check("the hours control changes what is drawn",
+              page.inner_text("#marey-day") != shown,
+              f"{shown} -> {page.inner_text('#marey-day')}")
+        # Colour carries a measurement here, so it has to actually be on the
+        # marks: one stroke for a whole run means the speed encoding is gone.
+        strokes = page.eval_on_selector_all(
+            "#marey-plot polyline",
+            "es => [...new Set(es.map(e => e.getAttribute('stroke')))]")
+        check("the Marey colours its hops by speed",
+              sum(1 for c in strokes if "--q" in (c or "")) >= 4, str(strokes)[:90])
+        # Distance and run time are different pictures of the same trains; if the
+        # toggle changed nothing, the second axis is decoration.
+        before = page.eval_on_selector("#marey-plot polyline",
+                                       "e => e.getAttribute('points')")
+        page.locator("#marey-filters").get_by_role("button", name="run time").click()
+        page.wait_for_timeout(300)
+        after = page.eval_on_selector("#marey-plot polyline",
+                                      "e => e.getAttribute('points')")
+        # The first station sits at zero on both axes, so the evidence has to be
+        # the far end of the hop, not its start.
+        far = lambda pts: pts.strip().split(" ")[-1]
+        check("the y axis can be distance or run time, and they differ",
+              before != after, f"{far(before)} vs {far(after)}")
+        dev = page.eval_on_selector_all(
+            "#spread-plot polyline",
+            "es => [...new Set(es.map(e => e.getAttribute('stroke')))]")
+        check("the collapsed diagram colours a journey against the typical one",
+              any("--ahead" in (c or "") for c in dev)
+              and any("--behind" in (c or "") for c in dev), str(dev)[:90])
+        page.get_by_role("button", name="show the numbers").click()
+        page.wait_for_timeout(200)
+        rows = page.eval_on_selector_all("#heat-table tr", "e => e.length")
+        check("the numbers behind the colours are one click away", rows > 1,
+              f"{rows} rows")
+        page.close()
+
+    # From file://, which can still reach the backend cross-origin: the page works.
+    page = browser.new_page()
+    page.route(re.compile(BACKEND_HOST), backend)
+    page.goto("file://" + str(ROOT / "web" / "figures.html"))
+    page.wait_for_timeout(2500)
+    runs = page.eval_on_selector_all("#marey-plot polyline", "e => e.length")
+    check("from file:// it still draws, from the backend", runs > 0, f"{runs} polylines")
+    page.close()
+
+    # Off the tailnet: the backend does not answer at all.
+    page = browser.new_page()
+    page.route(re.compile(BACKEND_HOST), lambda r: r.abort())
+    page.goto("file://" + str(ROOT / "web" / "figures.html"))
+    page.wait_for_timeout(1500)
+    said = page.inner_text("#marey-plot")
+    check("with no backend it names the failure instead of showing an empty frame",
+          "tailnet" in said, said[:90].replace("\n", " "))
+    page.close()
+
+
 def served_scenario(browser, check) -> None:
     """The same page over HTTP from the directory root: the deployed shape.
 
@@ -582,22 +721,7 @@ def served_scenario(browser, check) -> None:
     file:// board reaches by fallback -- model.json rather than model.js -- are only
     exercised here, and so is the icon a home-screen shortcut asks for.
     """
-    import functools
-    import http.server
-    import socketserver
-    import threading
-
-    # Quiet: the request log would bury the checks. This has to be a subclass --
-    # setting .log_message on a functools.partial succeeds silently and does
-    # nothing, because the partial is not the handler class.
-    class Quiet(http.server.SimpleHTTPRequestHandler):
-        def log_message(self, *a, **k):
-            pass
-
-    handler = functools.partial(Quiet, directory=str(ROOT / "web"))
-    with socketserver.TCPServer(("127.0.0.1", 0), handler) as httpd:
-        threading.Thread(target=httpd.serve_forever, daemon=True).start()
-        port = httpd.server_address[1]
+    with _serve_web() as port:
         fixture = sorted((ROOT / "tests" / "fixtures").glob("cases-*.json"))[0]
         case = json.loads(fixture.read_text())[0]
         live = shifted(case, time.time() - case["now"] + 30)
@@ -628,7 +752,6 @@ def served_scenario(browser, check) -> None:
         check("the home-screen icon is actually served", "image/png" in (icon or ""),
               str(icon))
         page.close()
-        httpd.shutdown()
 
 
 def _case_stopped_at_magoun():
@@ -806,6 +929,7 @@ def run(case_index: int, headed: bool) -> int:
         capture_scenario(browser, check)
         ratelimit_scenario(browser, check)
         served_scenario(browser, check)
+        figures_scenario(browser, check)
         browser.close()
 
     print()

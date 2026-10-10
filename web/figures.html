@@ -1,0 +1,1097 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Magoun — how the line ran</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'><rect width='180' height='180' rx='38' fill='%2300843D'/><g fill='%23ffffff'><rect x='56' y='44' width='68' height='20'/><rect x='56' y='80' width='58' height='20'/><rect x='56' y='116' width='68' height='20'/><rect x='56' y='44' width='20' height='92'/></g></svg>">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f8f5">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#11150f">
+<!-- The archive, drawn. Two figures over days that are already over: a Marey
+     diagram of the corridor and a heatmap of lateness at Magoun. The numbers all
+     come from the backend's /figures -- the nightly file src/figures.py derives
+     from the archive, which lives on the capture host and nowhere else. This page
+     does lookup and arithmetic, never modelling, for the same reason app.js reads
+     model.json instead of fitting anything.
+
+     No library, by constraint as much as by taste: tests/test_regressions.py
+     polices every host the origin reaches, and a CDN would be a new one. Marks
+     are SVG, drawn from the same tokens as the board.
+
+     The backend's address is model.json's backend_url, read from model.js so the
+     page also works from file://. Off the tailnet the backend is unreachable, which
+     is a normal state: the page says so rather than showing an empty frame. -->
+<style>
+  :root{--bg:#f6f8f5;--card:#fff;--ink:#16201b;--dim:#5e6a63;--line:#dfe6df;
+        --go:#00843D;--warn:#9c5c17;--bad:#9e2f2f;
+        --mono:"SF Mono",ui-monospace,Menlo,monospace;
+        /* chart roles. The two series are validated as a categorical pair in
+           both modes; the heat ramp is validated as an ordinal ramp per arm. */
+        --e:#00843D;            /* Green-E, the rider's train */
+        --d:#2a78d6;            /* Green-D, the other half of the trunk service */
+        --other:#5e6a63;        /* B and C, context: they never reach Magoun */
+        --grid:#e8eee8;--axis:#c9d3c9;
+        /* how fast that hop was, against every other train's time for the same
+           hop: five quintiles, one hue, light = quick. Validated as an ordinal
+           ramp against this card's surface in both modes. */
+        --q1:#74c476;--q2:#41ab5d;--q3:#238b45;--q4:#0b6b34;--q5:#00441b;
+        /* ahead of / on / behind the typical journey. The documented diverging
+           pair with a grey midpoint; three steps, because a fourth is two colours
+           nobody can tell apart at one pixel wide. */
+        --ahead:#2a78d6;--typical:#9aa49c;--behind:#c4512e;
+        --h-early:#2a78d6;--h-on:#e9e7e2;
+        --h1:#eda184;--h2:#e07a56;--h3:#c4512e;--h4:#92301a}
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+        --bg:#11150f;--card:#181d19;--ink:#e8efe8;--dim:#8d9a90;--line:#28302a;
+        --go:#3fb46f;--warn:#d69a46;--bad:#e07070;
+        --e:#2ea86a;--d:#3987e5;--other:#8d9a90;
+        --grid:#222a24;--axis:#39443c;
+        --q1:#c7e9c0;--q2:#8fd08a;--q3:#57b262;--q4:#2f8f4a;--q5:#1c6b39;
+        --ahead:#3987e5;--typical:#6a756e;--behind:#d9734a;
+        --h-early:#3987e5;--h-on:#30362f;
+        --h1:#8f4230;--h2:#b65e3a;--h3:#d9834f;--h4:#f0ab78}}
+  *{box-sizing:border-box}
+  body{margin:0;padding:20px 16px 48px;background:var(--bg);color:var(--ink);
+       font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1040px;margin:0 auto}
+  header{display:flex;justify-content:space-between;align-items:baseline;gap:12px;
+         border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:18px}
+  h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.01em}
+  h2{font-size:13px;margin:0;font-weight:600;letter-spacing:.01em}
+  a{color:var(--go)}
+  .as-of{font-family:var(--mono);font-size:12.5px;color:var(--dim);
+         font-variant-numeric:tabular-nums}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;
+        padding:14px 16px 12px;margin-bottom:14px}
+  .cardhead{display:flex;justify-content:space-between;align-items:baseline;
+            gap:12px;flex-wrap:wrap;margin-bottom:4px}
+  .note{color:var(--dim);font-size:12.5px;margin:6px 0 0}
+  .note b{font-weight:600;color:var(--ink)}
+  /* one row of filters above the chart, per the interaction rules */
+  .filters{display:flex;gap:14px;flex-wrap:wrap;align-items:center;
+           margin:10px 0 6px;font-size:12.5px}
+  .group{display:flex;gap:4px;align-items:center}
+  .group>span{color:var(--dim);margin-right:2px}
+  button{font:inherit;font-size:12.5px;color:var(--ink);background:var(--card);
+         border:1px solid var(--line);border-radius:999px;padding:3px 10px;
+         cursor:pointer;line-height:1.35}
+  button:hover{border-color:var(--axis)}
+  button[aria-pressed="true"]{background:color-mix(in srgb,var(--go) 12%,var(--card));
+         border-color:var(--go);font-weight:600}
+  .swatch{width:10px;height:10px;border-radius:2px;display:inline-block;
+          margin-right:5px;vertical-align:-1px}
+  .plot{position:relative;overflow-x:auto;overscroll-behavior-x:contain}
+  .plot svg{display:block}
+  .tick{font-size:10.5px;fill:var(--dim);font-family:var(--mono)}
+  .stopname{font-size:11px;fill:var(--dim)}
+  .stopname.me{fill:var(--ink);font-weight:700}
+  .run{fill:none;stroke-linejoin:round;stroke-linecap:round}
+  .tip{position:absolute;pointer-events:none;background:var(--card);
+       border:1px solid var(--line);border-radius:7px;padding:6px 9px;
+       font-size:12px;line-height:1.45;box-shadow:0 2px 8px rgba(0,0,0,.14);
+       white-space:nowrap;z-index:5;opacity:0;transition:opacity .08s}
+  .tip b{font-family:var(--mono);font-variant-numeric:tabular-nums;font-weight:600}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--dim);
+          margin-top:8px;align-items:center}
+  .legend>span{white-space:nowrap}
+  .ramp{display:flex;align-items:center;gap:0;margin-right:4px}
+  .ramp i{width:22px;height:11px;display:block}
+  .ramp i:first-child{border-radius:2px 0 0 2px}
+  .ramp i:last-child{border-radius:0 2px 2px 0}
+  .edges{display:flex;font-family:var(--mono);font-size:10px;color:var(--dim)}
+  .edges span{width:22px;text-align:center;transform:translateX(11px)}
+  table{border-collapse:collapse;font-size:12px;width:100%;
+        font-variant-numeric:tabular-nums}
+  th,td{padding:3px 6px;text-align:right;border-bottom:1px solid var(--line);
+        font-weight:400;white-space:nowrap}
+  th{color:var(--dim);font-size:11px;font-weight:600;text-align:right}
+  td:first-child,th:first-child{text-align:left;font-family:var(--mono)}
+  .tablewrap{overflow-x:auto;margin-top:8px}
+  .hidden{display:none}
+  .fail{color:var(--bad)}
+  footer{color:var(--dim);font-size:12px;margin-top:18px;line-height:1.55}
+</style>
+<div class="wrap">
+  <header>
+    <h1>Magoun — how the line ran</h1>
+    <span class="as-of" id="asof">loading…</span>
+  </header>
+
+  <section class="card" id="marey-card">
+    <div class="cardhead">
+      <h2>Every train on the corridor</h2>
+      <span class="as-of" id="marey-day"></span>
+    </div>
+    <p class="note">One line per train, walked out of the archive by vehicle. Time
+      runs left to right, the corridor runs top to bottom, and a station sits at
+      its <b>measured</b> running time from Medford/Tufts — so a straight line is a
+      train at the usual speed, a flat step is a stop, and the long flat step at
+      the top is the terminus layover. Drag across it to zoom in, double-click to
+      zoom back out.</p>
+    <div class="filters" id="marey-filters"></div>
+    <div class="plot" id="marey-plot"></div>
+    <div class="legend" id="marey-legend"></div>
+  </section>
+
+  <section class="card" id="spread-card">
+    <div class="cardhead">
+      <h2>Every journey, laid over each other</h2>
+      <span class="as-of" id="spread-n"></span>
+    </div>
+    <p class="note">The same runs, each slid sideways until its <b>Magoun
+      Square</b> stop sits at zero. One faint line per train, so the width of the
+      smear is how much the same trip varies; the solid line is the median and the
+      band is the 10th to 90th percentile of the trains that got that far.</p>
+    <div class="filters" id="spread-filters"></div>
+    <div class="plot" id="spread-plot"></div>
+    <div class="legend" id="spread-legend"></div>
+  </section>
+
+  <section class="card" id="heat-card">
+    <div class="cardhead">
+      <h2>Lateness at Magoun, inbound</h2>
+      <span class="as-of" id="heat-span"></span>
+    </div>
+    <p class="note">Each cell is the median of <b>actual minus scheduled</b> for the
+      trains booked into one 15-minute slot, so warm is late and there are about
+      two trains behind a cell.</p>
+    <div class="filters" id="heat-filters"></div>
+    <div class="plot" id="heat-plot"></div>
+    <div class="legend" id="heat-legend"></div>
+    <div class="tablewrap hidden" id="heat-table"></div>
+  </section>
+
+  <footer id="foot"></footer>
+</div>
+<script src="model.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const SVG = "http://www.w3.org/2000/svg";
+const el = (tag, attrs = {}, kids = []) => {
+  const n = document.createElementNS(SVG, tag);
+  for (const [k, v] of Object.entries(attrs)) if (v !== null) n.setAttribute(k, v);
+  for (const k of [].concat(kids)) n.append(k);
+  return n;
+};
+const hhmm = (s) => {
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0");
+};
+const mmss = (s) => (s < 0 ? "-" : "+") + Math.floor(Math.abs(s) / 60) + "m" +
+  String(Math.abs(s) % 60).padStart(2, "0") + "s";
+const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const weekday = (iso) => DOW[new Date(iso + "T12:00:00").getDay()];
+
+// The one thing this page asks of the world. A file:// page cannot fetch a
+// sibling file at all -- Chromium refuses the scheme before CORS is reached --
+// so the failure is named rather than left as an empty frame.
+let FIG = null;
+const S = {day: null, dir: "both", E: true, D: true, other: true, sched: true,
+           table: false, win: "6-10", zoom: null, sdir: "0", sday: "all",
+           axis: "m", speed: true, dev: true};
+// The whole corridor is a 21-minute ride. Drawn across a service day it is a
+// vertical spike 15 px wide, which is a picture of nothing -- so the diagram
+// opens on the morning and the rest is a window away.
+// They tile the day. The first set went 06-10, 10-15, 15-19, 19-02 and left
+// 00:00-06:00 reachable only from "all day" -- and the archived day is a calendar
+// day, so the trains that ran after midnight sit at its START, not past 24:00.
+const WINDOWS = [["0-6", "00–06"], ["6-10", "06–10"], ["10-15", "10–15"],
+                 ["15-19", "15–19"], ["19-24", "19–24"], ["all", "all day"]];
+
+// The same constant the board reads for /skips and /today. A model.js that failed
+// to load leaves no address, and that is said below rather than fetched as "null".
+const BACKEND = (() => {
+  try { return JSON.parse(globalThis.Magoun._modelText).constants.backend_url; }
+  catch (e) { return null; }
+})();
+
+(BACKEND ? fetch(`${BACKEND}/figures`, {signal: AbortSignal.timeout(8000)})
+   : Promise.reject(new Error("no backend_url in model.js")))
+.then(r => {
+  // A 503 is the backend answering that it has nothing to draw yet -- a different
+  // fault from not answering at all, so it gets its own words.
+  if (!r.ok) throw new Error(`the backend has no figures yet (HTTP ${r.status})`);
+  return r.json();
+}).then(fig => {
+  FIG = fig;
+  S.day = fig.marey.days.length ? fig.marey.days[fig.marey.days.length - 1].day : null;
+  draw();
+}).catch(err => {
+  $("asof").textContent = "no data";
+  $("marey-plot").innerHTML = '<p class="note fail">The figures did not load: ' +
+    err.message + '. They are drawn from the archive on the home Mac and served ' +
+    'over Tailscale, so this page only works on the tailnet.</p>';
+  $("heat-card").classList.add("hidden");
+});
+
+function draw() {
+  const when = new Date(FIG.as_of * 1000);
+  $("asof").textContent = "derived " + when.toLocaleString([], {month: "short",
+    day: "numeric", hour: "2-digit", minute: "2-digit"});
+  pickWindow();
+  mareyFilters();
+  marey();
+  spreadFilters();
+  spread();
+  heatFilters();
+  heat();
+  foot();
+}
+
+// ---- controls ---------------------------------------------------------------
+function chip(label, pressed, onClick, swatch) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.setAttribute("aria-pressed", String(pressed));
+  if (swatch) {
+    const s = document.createElement("i");
+    s.className = "swatch";
+    s.style.background = swatch;
+    b.append(s);
+  }
+  b.append(document.createTextNode(label));
+  b.onclick = () => { onClick(); };
+  return b;
+}
+
+// Switching to a day the archiver only caught half of should not land on an
+// empty frame: 2026-09-24 starts at 13:34, so its morning windows have nothing
+// in them. Keep the chosen window if it holds anything, else take the first that
+// does.
+function pickWindow() {
+  const day = FIG.marey.days.find(x => x.day === S.day);
+  if (!day) return;
+  const has = (k) => {
+    if (k === "all") return day.runs.length > 0;
+    const [a, b] = k.split("-").map(Number);
+    return day.runs.some(r =>
+      r.p[r.p.length - 2] + r.p[r.p.length - 1] >= a * 3600 && r.p[1] <= b * 3600);
+  };
+  if (has(S.win)) return;
+  const first = WINDOWS.find(([k]) => has(k));
+  S.win = first ? first[0] : "all";
+}
+
+function mareyFilters() {
+  const f = $("marey-filters");
+  f.textContent = "";
+  const days = FIG.marey.days.map(d => d.day);
+  const g1 = document.createElement("span");
+  g1.className = "group";
+  g1.append(Object.assign(document.createElement("span"), {textContent: "day"}));
+  for (const d of days) {
+    g1.append(chip(weekday(d) + " " + d.slice(5), d === S.day,
+      () => { S.day = d; S.zoom = null; pickWindow(); mareyFilters(); marey(); }));
+  }
+  const gw = document.createElement("span");
+  gw.className = "group";
+  gw.append(Object.assign(document.createElement("span"), {textContent: "hours"}));
+  // An empty window says so before it is clicked: on 2026-09-24 the archiver only
+  // started at 13:34, and a chip that silently draws nothing looks like a bug.
+  const today = FIG.marey.days.find(x => x.day === S.day);
+  const inWindow = (k) => {
+    if (k === "all") return (today ? today.runs.length : 0);
+    const [a, b] = k.split("-").map(Number);
+    return (today ? today.runs : []).filter(r =>
+      r.p[r.p.length - 2] + r.p[r.p.length - 1] >= a * 3600 && r.p[1] <= b * 3600
+    ).length;
+  };
+  for (const [k, label] of WINDOWS) {
+    const n = inWindow(k);
+    const c = chip(label, S.win === k && !S.zoom,
+      () => { S.win = k; S.zoom = null; mareyFilters(); marey(); });
+    c.title = n + (n === 1 ? " run" : " runs");
+    if (!n) { c.style.opacity = 0.45; }
+    gw.append(c);
+  }
+  if (S.zoom) {
+    gw.append(chip("↺ " + hhmm(S.zoom[0]) + "–" + hhmm(S.zoom[1] % 86400), true,
+      () => { S.zoom = null; mareyFilters(); marey(); }));
+  }
+  const g2 = document.createElement("span");
+  g2.className = "group";
+  g2.append(Object.assign(document.createElement("span"), {textContent: "direction"}));
+  for (const [k, label] of [["both", "both"], ["0", "inbound"], ["1", "outbound"]]) {
+    g2.append(chip(label, S.dir === k,
+      () => { S.dir = k; mareyFilters(); marey(); }));
+  }
+  const g3 = document.createElement("span");
+  g3.className = "group";
+  // figures.py publishes Green-E alone unless it is run with --routes, so these
+  // chips appear only when there is more than one line to choose between. A
+  // filter over a single series is furniture.
+  const many = (FIG.routes || []).length > 1;
+  if (many) {
+    g3.append(Object.assign(document.createElement("span"), {textContent: "show"}));
+    g3.append(chip("Green-E", S.E, () => { S.E = !S.E; mareyFilters(); marey(); },
+      "var(--e)"));
+    g3.append(chip("Green-D", S.D, () => { S.D = !S.D; mareyFilters(); marey(); },
+      "var(--d)"));
+    g3.append(chip("B / C", S.other, () => { S.other = !S.other; mareyFilters(); marey(); },
+      "var(--other)"));
+  }
+  g3.append(chip("timetable", S.sched, () => { S.sched = !S.sched; mareyFilters(); marey(); }));
+  g3.append(chip("colour by speed", S.speed,
+    () => { S.speed = !S.speed; mareyFilters(); marey(); }));
+  const g4 = document.createElement("span");
+  g4.className = "group";
+  if (hasMetres()) {
+    g4.append(Object.assign(document.createElement("span"), {textContent: "y axis"}));
+    for (const [k, label] of [["m", "distance"], ["y", "run time"]]) {
+      g4.append(chip(label, S.axis === k, () => {
+        S.axis = k;
+        mareyFilters(); marey(); spread();
+      }));
+    }
+  }
+  f.append(g1, gw, g2, g3, g4);
+}
+
+function heatFilters() {
+  const f = $("heat-filters");
+  f.textContent = "";
+  const g = document.createElement("span");
+  g.className = "group";
+  g.append(chip(S.table ? "show the map" : "show the numbers", S.table, () => {
+    S.table = !S.table;
+    heatFilters();
+    $("heat-plot").classList.toggle("hidden", S.table);
+    $("heat-table").classList.toggle("hidden", !S.table);
+  }));
+  f.append(g);
+}
+
+// ---- the two things both diagrams need --------------------------------------
+// The y axis is a choice, and the two answers disagree by a factor of two: the
+// GLX runs 5.4 km in 8.8 min and the downtown tunnel 2.6 km in 8.8 min. On METRES
+// the slope is the speed and the tunnel crawl is visible as a shallow line; on RUN
+// TIME an ordinary train is straight by construction and an abnormal one bends.
+// Neither is the true one, so both are published and this picks.
+const hasMetres = () => FIG.stops.every(s => s.m != null);
+const ypos = (st) => (S.axis === "m" && st.m != null ? st.m : st.y);
+const ytop = () => ypos(FIG.stops[FIG.stops.length - 1]);
+
+// Every hop anyone made between two stations, so one hop can be put in its place:
+// the colour is the percentile of THAT hop against every other train's time for
+// the same pair of stations, not against some global idea of fast.
+let HOPS = null;
+const hopKey = (d, a, b) => d + ":" + Math.min(a, b) + ":" + Math.max(a, b);
+function hops() {
+  if (HOPS) return HOPS;
+  HOPS = new Map();
+  for (const d of FIG.marey.days) {
+    for (const r of d.runs) {
+      for (let i = 0; i + 5 < r.p.length; i += 3) {
+        const run = r.p[i + 4] - (r.p[i + 1] + r.p[i + 2]);
+        if (run <= 0 || run > 1800) continue;
+        const k = hopKey(r.d, r.p[i], r.p[i + 3]);
+        if (!HOPS.has(k)) HOPS.set(k, []);
+        HOPS.get(k).push(run);
+      }
+    }
+  }
+  for (const v of HOPS.values()) v.sort((x, y) => x - y);
+  return HOPS;
+}
+
+const QUINTILE = ["var(--q1)", "var(--q2)", "var(--q3)", "var(--q4)", "var(--q5)"];
+
+/** Station label positions, pushed apart just enough to stay readable.
+ *
+ * On the distance axis North Station and Haymarket are 297 m apart, which is
+ * 16 px of a 514 px plot -- less on a narrow screen. The grid line stays where
+ * the station is; only the name moves, by the least that keeps it legible. */
+function labelYs(ys, gap = 12) {
+  const out = ys.slice();
+  for (let i = 1; i < out.length; i++) {
+    if (out[i] - out[i - 1] < gap) out[i] = out[i - 1] + gap;
+  }
+  const over = out[out.length - 1] - ys[ys.length - 1];
+  if (over > 0) for (let i = 0; i < out.length; i++) out[i] -= over;
+  return out;
+}
+
+/** Which fifth of that hop's own distribution this one lands in, or null.
+ *
+ * Keyed by direction as well as by the pair of stations, because the two
+ * directions are not the same hop: Medford/Tufts to Ball Square runs 106 s
+ * inbound and 135 s outbound, and Government Center to Park Street the other way
+ * round. Pooled, the colour was mostly telling you which way the train was
+ * going -- every outbound run came out dark and every inbound one light.
+ *
+ * Arrivals are 15-second samples, so a hop's times land on a coarse grid and the
+ * middle quintiles can hold the same number. That is the resolution, not a bug;
+ * the ramp is honest about which fifth, not about seconds. */
+function speedBucket(d, a, b, run) {
+  const v = hops().get(hopKey(d, a, b));
+  if (!v || v.length < 10 || !(run > 0)) return null;
+  let lo = 0, hi = v.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (v[mid] < run) lo = mid + 1; else hi = mid; }
+  return Math.min(4, Math.floor(lo / v.length * 5));
+}
+
+// ---- the Marey diagram ------------------------------------------------------
+const ROUTE_COLOR = {E: "var(--e)", D: "var(--d)"};
+const routeOn = (r) => r === "E" ? S.E : r === "D" ? S.D : S.other;
+
+function marey() {
+  const box = $("marey-plot");
+  box.textContent = "";
+  const day = FIG.marey.days.find(d => d.day === S.day);
+  if (!day) { box.innerHTML = '<p class="note">no archived day to draw</p>'; return; }
+  const counter = $("marey-day");
+
+  const stops = FIG.stops, ymax = ytop();
+  const W = 980, H = 560, L = 118, R = 18, T = 16, B = 30;
+  const iw = W - L - R, ih = H - T - B;
+  // The window is the day's own service span, not a clock day: 04:30 to 01:30
+  // drawn as a fixed frame would spend a sixth of the width on an empty corridor.
+  let t0 = Infinity, t1 = -Infinity;
+  for (const r of day.runs) for (let i = 1; i < r.p.length; i += 3) {
+    if (r.p[i] < t0) t0 = r.p[i];
+    if (r.p[i] + r.p[i + 1] > t1) t1 = r.p[i] + r.p[i + 1];
+  }
+  if (!isFinite(t0)) { t0 = 5 * 3600; t1 = 25 * 3600; }
+  t0 = Math.floor(t0 / 1800) * 1800; t1 = Math.ceil(t1 / 1800) * 1800;
+  const span = [t0, t1];
+  if (S.zoom) {
+    [t0, t1] = S.zoom;
+  } else if (S.win !== "all") {
+    const [a, b] = S.win.split("-").map(Number);
+    t0 = Math.max(a * 3600, span[0]);
+    t1 = Math.min(b * 3600, span[1]);
+    if (t1 - t0 < 1800) { t0 = a * 3600; t1 = b * 3600; }
+  }
+  const x = (t) => L + (t - t0) / (t1 - t0) * iw;
+  const y = (v) => T + v / ymax * ih;
+
+  const svg = el("svg", {viewBox: `0 0 ${W} ${H}`, width: "100%",
+    style: `min-width:${Math.min(880, W)}px`, role: "img",
+    "aria-label": "Marey diagram of every train on the corridor"});
+  const clip = el("clipPath", {id: "plotbox"},
+    [el("rect", {x: L, y: T - 2, width: iw, height: ih + 4})]);
+  svg.append(el("defs", {}, [clip]));
+  const marks = el("g", {"clip-path": "url(#plotbox)"});
+
+  // station gridlines, Magoun picked out
+  const labs = labelYs(stops.map(s => y(ypos(s))));
+  for (const [i, s] of stops.entries()) {
+    const yy = y(ypos(s));
+    svg.append(el("line", {x1: L, x2: W - R, y1: yy, y2: yy,
+      stroke: i === FIG.magoun ? "var(--axis)" : "var(--grid)", "stroke-width": 1}));
+    const t = el("text", {x: L - 8, y: labs[i] + 3.5, "text-anchor": "end",
+      class: "stopname" + (i === FIG.magoun ? " me" : "")});
+    t.textContent = s.name;
+    svg.append(t);
+  }
+  // hour ticks
+  for (let t = Math.ceil(t0 / 3600) * 3600; t <= t1; t += 3600) {
+    const step = (t1 - t0) > 12 * 3600 ? 7200 : 3600;
+    if (t % step) continue;
+    svg.append(el("line", {x1: x(t), x2: x(t), y1: T, y2: T + ih,
+      stroke: "var(--grid)", "stroke-width": 1}));
+    const lab = el("text", {x: x(t), y: H - 10, "text-anchor": "middle", class: "tick"});
+    lab.textContent = hhmm(t % 86400);
+    svg.append(lab);
+  }
+
+  // the timetable underneath, never joined to a train (the ids do not survive a
+  // GTFS republish), so it is drawn as its own faint set of lines.
+  if (S.sched) {
+    for (const r of day.sched) {
+      const pts = [];
+      for (let i = 0; i < r.p.length; i += 2) {
+        pts.push(x(r.p[i + 1]) + "," + y(ypos(stops[r.p[i]])));
+      }
+      marks.append(el("polyline", {points: pts.join(" "), class: "run",
+        stroke: "var(--dim)", "stroke-width": 1, "stroke-dasharray": "3 3",
+        opacity: 0.38}));
+    }
+  }
+
+  // the trains. Two vertices per stop -- arrival and departure -- so a dwell is a
+  // flat step and the terminus layover is visible as the long one.
+  const hot = [];
+  const drawn = [];
+  const visible = day.runs.filter(r => {
+    if (!routeOn(r.r)) return false;
+    if (S.dir !== "both" && String(r.d) !== S.dir) return false;
+    const a = r.p[1], z = r.p[r.p.length - 2] + r.p[r.p.length - 1];
+    return z >= t0 && a <= t1;
+  });
+  for (const r of visible) {
+    const pts = [];
+    for (let i = 0; i < r.p.length; i += 3) {
+      const yy = y(ypos(stops[r.p[i]])), t = r.p[i + 1], dw = r.p[i + 2];
+      pts.push([x(t), yy]);
+      if (dw > 0) pts.push([x(t + dw), yy]);
+      hot.push({x: x(t), y: yy, run: r, t: t, stop: r.p[i], dwell: dw});
+    }
+    const other = !ROUTE_COLOR[r.r];
+    const w = other ? 1.1 : 1.8;
+    if (!S.speed) {
+      const p = el("polyline", {points: pts.map(q => q[0] + "," + q[1]).join(" "),
+        class: "run", stroke: ROUTE_COLOR[r.r] || "var(--other)",
+        "stroke-width": w, opacity: other ? 0.45 : 0.92});
+      drawn.push(p);
+      marks.append(p);
+      continue;
+    }
+    // One polyline per hop -- dwell, then the run to the next station -- so the
+    // colour is about a leg of the trip rather than about the whole train.
+    const g = el("g", {opacity: other ? 0.45 : 0.92});
+    for (let i = 0; i + 5 < r.p.length; i += 3) {
+      const a = r.p[i], b = r.p[i + 3];
+      const ta = r.p[i + 1], dw = r.p[i + 2], tb = r.p[i + 4];
+      const q = speedBucket(r.d, a, b, tb - (ta + dw));
+      g.append(el("polyline", {class: "run", "stroke-width": w,
+        stroke: q === null ? "var(--other)" : QUINTILE[q],
+        points: [[x(ta), y(ypos(stops[a]))], [x(ta + dw), y(ypos(stops[a]))],
+                 [x(tb), y(ypos(stops[b]))]].map(c => c[0] + "," + c[1]).join(" ")}));
+    }
+    drawn.push(g);
+    marks.append(g);
+  }
+  svg.append(marks);
+  if (!drawn.length) {
+    const t = el("text", {x: L + iw / 2, y: T + ih / 2, "text-anchor": "middle",
+      class: "tick"});
+    t.textContent = "no train ran here in this window";
+    svg.append(t);
+  }
+  counter.textContent = drawn.length + " of " + day.runs.length + " runs";
+  const focus = el("circle", {r: 4.5, fill: "var(--card)", stroke: "var(--ink)",
+    "stroke-width": 2, opacity: 0});
+  svg.append(focus);
+  box.append(svg);
+
+  // hover: nearest vertex wins, and the whole run lights up with it
+  const tip = document.createElement("div");
+  tip.className = "tip";
+  box.append(tip);
+  let lit = null;
+  const unlight = () => {
+    if (!lit) return;
+    const parts = lit.tagName === "g" ? [...lit.children] : [lit];
+    parts.forEach(q => q.setAttribute("stroke-width", lit.dataset.w));
+    lit = null;
+  };
+  svg.addEventListener("pointerleave", () => {
+    tip.style.opacity = 0; focus.setAttribute("opacity", 0);
+    unlight();
+  });
+  svg.addEventListener("pointermove", (ev) => {
+    const r = svg.getBoundingClientRect(), k = W / r.width;
+    const px = (ev.clientX - r.left) * k, py = (ev.clientY - r.top) * k;
+    let best = null, bd = 1e9;
+    for (const h of hot) {
+      const d = (h.x - px) ** 2 + ((h.y - py) * 2.2) ** 2;
+      if (d < bd) { bd = d; best = h; }
+    }
+    if (!best || bd > 900) {
+      tip.style.opacity = 0; focus.setAttribute("opacity", 0);
+      unlight();
+      return;
+    }
+    focus.setAttribute("cx", best.x);
+    focus.setAttribute("cy", best.y);
+    focus.setAttribute("opacity", 1);
+    const line = drawn[visible.indexOf(best.run)];
+    const parts = (n) => (n.tagName === "g" ? [...n.children] : [n]);
+    if (lit && lit !== line) {
+      parts(lit).forEach(q => q.setAttribute("stroke-width", lit.dataset.w));
+    }
+    if (line) {
+      line.dataset.w = line.dataset.w
+        || parts(line)[0].getAttribute("stroke-width");
+      parts(line).forEach(q => q.setAttribute("stroke-width", 3.2));
+      lit = line;
+    }
+    tip.innerHTML = "<b>" + hhmm(best.t) + "</b> " + FIG.stops[best.stop].name +
+      "<br>Green-" + best.run.r + " " + (best.run.d ? "outbound" : "inbound") +
+      " · " + best.run.v +
+      (best.dwell ? "<br>stopped <b>" + best.dwell + "s</b>" : "");
+    const left = Math.min(Math.max(ev.clientX - r.left + 14, 4), r.width - 200);
+    tip.style.left = left + "px";
+    tip.style.top = Math.max(ev.clientY - r.top - 46, 2) + "px";
+    tip.style.opacity = 1;
+  });
+
+  // Drag across the plot to pick a narrower window; double-click to give it back.
+  const band = el("rect", {y: T, height: ih, fill: "var(--ink)", opacity: 0.08,
+    width: 0, x: 0, "pointer-events": "none"});
+  svg.append(band);
+  let from = null;
+  const atX = (ev) => {
+    const r = svg.getBoundingClientRect();
+    const px = (ev.clientX - r.left) * (W / r.width);
+    return t0 + (Math.min(Math.max(px, L), W - R) - L) / iw * (t1 - t0);
+  };
+  svg.addEventListener("pointerdown", (ev) => { from = atX(ev); tip.style.opacity = 0; });
+  svg.addEventListener("pointermove", (ev) => {
+    if (from === null) return;
+    const a = Math.min(from, atX(ev)), b = Math.max(from, atX(ev));
+    band.setAttribute("x", x(a));
+    band.setAttribute("width", Math.max(0, x(b) - x(a)));
+  });
+  svg.addEventListener("pointerup", (ev) => {
+    if (from === null) return;
+    const a = Math.min(from, atX(ev)), b = Math.max(from, atX(ev));
+    from = null;
+    band.setAttribute("width", 0);
+    if (b - a > 240) { S.zoom = [Math.round(a), Math.round(b)]; mareyFilters(); marey(); }
+  });
+  svg.addEventListener("dblclick", () => {
+    if (S.zoom) { S.zoom = null; mareyFilters(); marey(); }
+  });
+
+  const lg = $("marey-legend");
+  lg.textContent = "";
+  const items = [["E", "Green-E", "var(--e)"], ["D", "Green-D", "var(--d)"],
+                 ["B", "B / C (they stop short of Magoun)", "var(--other)"]];
+  const routes = new Set(FIG.routes || []);
+  if (routes.size > 1) {
+    for (const [key, label, color] of items) {
+      if (!routes.has(key) && !(key === "B" && (routes.has("B") || routes.has("C")))) continue;
+      const s = document.createElement("span");
+      s.innerHTML = '<i class="swatch" style="background:' + color + '"></i>' + label;
+      lg.append(s);
+    }
+  }
+  if (S.speed) {
+    const ramp = document.createElement("span");
+    ramp.className = "ramp";
+    for (const c of QUINTILE) {
+      const i = document.createElement("i");
+      i.style.background = c;
+      ramp.append(i);
+    }
+    const cap = document.createElement("span");
+    cap.textContent = "quickest fifth of that hop \u2192 slowest";
+    lg.append(ramp, cap);
+  }
+  if (S.sched) {
+    const s = document.createElement("span");
+    s.innerHTML = '<svg width="18" height="10" style="vertical-align:-1px;' +
+      'margin-right:4px"><line x1="0" y1="5" x2="18" y2="5" stroke="currentColor" ' +
+      'stroke-width="1.4" stroke-dasharray="3 3" opacity=".7"/></svg>the timetable' +
+      (day.sched_stops.length && day.sched_stops.length < FIG.stops.length
+        ? " (inbound, " + FIG.stops[Math.min(...day.sched_stops)].name + " to " +
+          FIG.stops[Math.max(...day.sched_stops)].name + ")"
+        : "");
+    lg.append(s);
+  }
+}
+
+
+// ---- every journey on top of every other one --------------------------------
+// Anchored at Magoun rather than at each run's first stop: the runs do not all
+// start in the same place -- a train entering service at the Lechmere yard joins
+// mid-corridor -- and this is a Magoun board, so zero is the moment the rider's
+// train is in front of the rider.
+function spreadFilters() {
+  const f = $("spread-filters");
+  f.textContent = "";
+  const g1 = document.createElement("span");
+  g1.className = "group";
+  g1.append(Object.assign(document.createElement("span"), {textContent: "direction"}));
+  for (const [k, label] of [["0", "inbound"], ["1", "outbound"], ["both", "both"]]) {
+    g1.append(chip(label, S.sdir === k, () => { S.sdir = k; spreadFilters(); spread(); }));
+  }
+  const g2 = document.createElement("span");
+  g2.className = "group";
+  g2.append(Object.assign(document.createElement("span"), {textContent: "day"}));
+  g2.append(chip("all " + FIG.marey.days.length, S.sday === "all",
+    () => { S.sday = "all"; spreadFilters(); spread(); }));
+  for (const d of FIG.marey.days) {
+    g2.append(chip(weekday(d.day) + " " + d.day.slice(5), S.sday === d.day,
+      () => { S.sday = d.day; spreadFilters(); spread(); }));
+  }
+  const g3 = document.createElement("span");
+  g3.className = "group";
+  g3.append(chip("colour by deviation", S.dev,
+    () => { S.dev = !S.dev; spreadFilters(); spread(); }));
+  f.append(g1, g2, g3);
+}
+
+function quantile(sorted, q) {
+  const i = (sorted.length - 1) * q, lo = Math.floor(i), hi = Math.ceil(i);
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo);
+}
+
+function spread() {
+  const box = $("spread-plot");
+  box.textContent = "";
+  const stops = FIG.stops, ymax = ytop();
+  const days = FIG.marey.days.filter(d => S.sday === "all" || d.day === S.sday);
+  const journeys = [];
+  for (const d of days) {
+    for (const r of d.runs) {
+      if (S.sdir !== "both" && String(r.d) !== S.sdir) continue;
+      let anchor = null;
+      for (let i = 0; i < r.p.length; i += 3) {
+        if (r.p[i] === FIG.magoun) { anchor = r.p[i + 1]; break; }
+      }
+      if (anchor === null || r.p.length < 12) continue;
+      const pts = [];
+      for (let i = 0; i < r.p.length; i += 3) pts.push([r.p[i], r.p[i + 1] - anchor]);
+      journeys.push({day: d.day, v: r.v, d: r.d, pts});
+    }
+  }
+  $("spread-n").textContent = journeys.length + " journeys through Magoun";
+  if (!journeys.length) {
+    box.innerHTML = '<p class="note">no journey in the archive matches that</p>';
+    $("spread-legend").textContent = "";
+    return;
+  }
+
+  // Per station, where the trains were relative to their own Magoun stop -- and
+  // per DIRECTION, because pooling them is what makes "both" nonsense: the two
+  // halves are mirror images, so their pooled median zig-zags across the middle
+  // and describes no train that ever ran.
+  const MIN_N = 5;   // below this a "band" is two trains wearing a distribution
+  const dirs = [...new Set(journeys.map(j => j.d))].sort();
+  const byDir = new Map(dirs.map(d => [d, stops.map(() => [])]));
+  for (const j of journeys) {
+    const at = byDir.get(j.d);
+    for (const [st, e] of j.pts) at[st].push(e);
+  }
+  for (const at of byDir.values()) at.forEach(a => a.sort((x, y) => x - y));
+  const at = stops.map((_, i) =>
+    [].concat(...dirs.map(d => byDir.get(d)[i])).sort((x, y) => x - y));
+  // The frame is what the STATIONS span, not what the points span: a train that
+  // sat twenty minutes at the terminus is a real line and it is drawn, but if it
+  // sets the axis then the half of the picture anyone is reading gets squeezed
+  // into a third of the width. Everything outside is clipped, never dropped.
+  const spans = stops.map((_, i) => at[i].length >= MIN_N
+    ? [quantile(at[i], 0.05), quantile(at[i], 0.95)] : null).filter(Boolean);
+  let e0 = Math.min(...spans.map(q => q[0])), e1 = Math.max(...spans.map(q => q[1]));
+  const pad = (e1 - e0) * 0.06 + 30;
+  e0 -= pad; e1 += pad;
+
+  const W = 980, H = 500, L = 118, R = 18, T = 16, B = 30;
+  const iw = W - L - R, ih = H - T - B;
+  const x = (e) => L + (e - e0) / (e1 - e0) * iw;
+  const y = (v) => T + v / ymax * ih;
+  const svg = el("svg", {viewBox: `0 0 ${W} ${H}`, width: "100%",
+    style: `min-width:${Math.min(880, W)}px`, role: "img",
+    "aria-label": "every journey through Magoun, aligned at Magoun"});
+  svg.append(el("defs", {}, [el("clipPath", {id: "spreadbox"},
+    [el("rect", {x: L, y: T - 2, width: iw, height: ih + 4})])]));
+
+  const labs = labelYs(stops.map(st => y(ypos(st))));
+  for (const [i, st] of stops.entries()) {
+    const yy = y(ypos(st));
+    svg.append(el("line", {x1: L, x2: W - R, y1: yy, y2: yy,
+      stroke: i === FIG.magoun ? "var(--axis)" : "var(--grid)", "stroke-width": 1}));
+    const t = el("text", {x: L - 8, y: labs[i] + 3.5, "text-anchor": "end",
+      class: "stopname" + (i === FIG.magoun ? " me" : "")});
+    t.textContent = st.name;
+    svg.append(t);
+  }
+  const step = (e1 - e0) > 3600 ? 600 : 300;
+  for (let e = Math.ceil(e0 / step) * step; e <= e1; e += step) {
+    const zero = Math.abs(e) < 1;
+    svg.append(el("line", {x1: x(e), x2: x(e), y1: T, y2: T + ih,
+      stroke: zero ? "var(--axis)" : "var(--grid)", "stroke-width": 1}));
+    const lab = el("text", {x: x(e), y: H - 10, "text-anchor": "middle", class: "tick"});
+    lab.textContent = (e > 0 ? "+" : "") + Math.round(e / 60) + (zero ? "" : "m");
+    svg.append(lab);
+  }
+
+  const marks = el("g", {"clip-path": "url(#spreadbox)"});
+  // Colour is the one thing a smear of 300 lines cannot say by itself: where a
+  // journey was ahead of the typical one and where it fell behind. Diverging,
+  // because the middle is the interesting zero and both sides are real -- a full
+  // minute either way of the median trip at that station.
+  const DEV_S = 60;
+  const med = new Map();
+  for (const d of dirs) {
+    med.set(d, stops.map((_, i) => byDir.get(d)[i].length >= MIN_N
+      ? quantile(byDir.get(d)[i], 0.50) : null));
+  }
+  const devColour = (d, st, e) => {
+    const m = med.get(d)[st];
+    if (m === null) return "var(--typical)";
+    return e < m - DEV_S ? "var(--ahead)" : e > m + DEV_S ? "var(--behind)"
+      : "var(--typical)";
+  };
+  for (const j of journeys) {
+    const at = j.pts.map(([st, e]) => [x(e), y(ypos(stops[st]))]);
+    if (!S.dev) {
+      marks.append(el("polyline", {class: "run",
+        points: at.map(c => c[0] + "," + c[1]).join(" "),
+        stroke: "var(--e)", "stroke-width": 1, opacity: 0.09}));
+      continue;
+    }
+    // Each leg takes the colour of the station it ARRIVES at: that is the point
+    // where the train is ahead or behind, and the leg is how it got there.
+    for (let i = 0; i + 1 < at.length; i++) {
+      marks.append(el("polyline", {class: "run", "stroke-width": 1, opacity: 0.22,
+        stroke: devColour(j.d, j.pts[i + 1][0], j.pts[i + 1][1]),
+        points: at[i][0] + "," + at[i][1] + " " + at[i + 1][0] + "," + at[i + 1][1]}));
+    }
+  }
+  // One band and one median per direction, over the stations with enough trains
+  // behind them to have either.
+  for (const d of dirs) {
+    const a = byDir.get(d);
+    const band = stops.map((st, i) => [i, st]).filter(([i]) => a[i].length >= MIN_N);
+    if (band.length < 2) continue;
+    const up = band.map(([i, st]) => x(quantile(a[i], 0.10)) + "," + y(ypos(st)));
+    const down = band.slice().reverse()
+      .map(([i, st]) => x(quantile(a[i], 0.90)) + "," + y(ypos(st)));
+    // When the lines carry the colour, the summary steps back into the ink: a
+    // green band over blue and red journeys is a third hue saying nothing.
+    marks.append(el("polygon", {points: up.concat(down).join(" "),
+      fill: S.dev ? "var(--ink)" : "var(--e)", opacity: S.dev ? 0.07 : 0.16}));
+    marks.append(el("polyline", {class: "run",
+      stroke: S.dev ? "var(--ink)" : "var(--e)", "stroke-width": 2,
+      points: band.map(([i, st]) => x(quantile(a[i], 0.50)) + "," + y(ypos(st))).join(" ")}));
+  }
+  svg.append(marks);
+  const rule = el("line", {y1: T, y2: T + ih, stroke: "var(--ink)",
+    "stroke-width": 1, opacity: 0, "pointer-events": "none"});
+  svg.append(rule);
+  box.append(svg);
+
+  const tip = document.createElement("div");
+  tip.className = "tip";
+  box.append(tip);
+  svg.addEventListener("pointerleave", () => {
+    tip.style.opacity = 0; rule.setAttribute("opacity", 0);
+  });
+  svg.addEventListener("pointermove", (ev) => {
+    const r = svg.getBoundingClientRect(), k = W / r.width;
+    const py = (ev.clientY - r.top) * k;
+    let best = 0;
+    stops.forEach((st, i) => {
+      if (Math.abs(y(ypos(st)) - py) < Math.abs(y(ypos(stops[best])) - py)) best = i;
+    });
+    const sgn = (v) => (v > 0 ? "+" : "") + (v / 60).toFixed(1) + " min";
+    const lines = [];
+    let first = null;
+    for (const d of dirs) {
+      const vals = byDir.get(d)[best];
+      if (vals.length < MIN_N) continue;
+      const med = quantile(vals, 0.50);
+      if (first === null) first = med;
+      lines.push((dirs.length > 1 ? (d ? "outbound " : "inbound ") : "") +
+        "median <b>" + sgn(med) + "</b>, 10th–90th <b>" +
+        sgn(quantile(vals, 0.10)) + "</b> to <b>" + sgn(quantile(vals, 0.90)) +
+        "</b> · " + vals.length + " trains");
+    }
+    if (!lines.length) { tip.style.opacity = 0; rule.setAttribute("opacity", 0); return; }
+    rule.setAttribute("x1", x(first));
+    rule.setAttribute("x2", x(first));
+    rule.setAttribute("opacity", 0.25);
+    tip.innerHTML = "<b>" + stops[best].name + "</b> · from Magoun<br>" +
+      lines.join("<br>");
+    tip.style.left = Math.min(Math.max(ev.clientX - r.left + 14, 4), r.width - 210) + "px";
+    tip.style.top = Math.max(ev.clientY - r.top - 56, 2) + "px";
+    tip.style.opacity = 1;
+  });
+
+  const lg = $("spread-legend");
+  lg.textContent = "";
+  const a = document.createElement("span");
+  a.innerHTML = S.dev
+    ? '<i class="swatch" style="background:var(--ahead)"></i>a minute or more ' +
+      'ahead of the typical journey<i class="swatch" style="margin-left:10px;' +
+      'background:var(--typical)"></i>within a minute<i class="swatch" ' +
+      'style="margin-left:10px;background:var(--behind)"></i>a minute or more behind'
+    : '<svg width="18" height="10" style="vertical-align:-1px;' +
+      'margin-right:4px"><line x1="0" y1="5" x2="18" y2="5" stroke="var(--e)" ' +
+      'stroke-width="1" opacity=".35"/></svg>one train';
+  const b = document.createElement("span");
+  const stat = S.dev ? "var(--ink)" : "var(--e)";
+  b.innerHTML = '<i class="swatch" style="opacity:.25;background:' + stat + '"></i>' +
+    '10th–90th percentile<i class="swatch" style="margin-left:10px;' +
+    'background:' + stat + '"></i>median';
+  const c = document.createElement("span");
+  c.textContent = "a station with fewer than " + MIN_N +
+    " trains carries no band";
+  lg.append(a, b, c);
+}
+
+// ---- the heatmap ------------------------------------------------------------
+// Signed, and the arms are not the same length because the measurement is not
+// symmetric: 12.6% of cells sit at or below zero and the median is +80 s. An
+// even ramp either side of zero would invent an early side.
+const BUCKETS = [
+  [-1e9, -60, "var(--h-early)", "early"],
+  [-60, 60, "var(--h-on)", "within a minute"],
+  [60, 150, "var(--h1)", "1–2½ min late"],
+  [150, 300, "var(--h2)", "2½–5 min"],
+  [300, 600, "var(--h3)", "5–10 min"],
+  [600, 1e9, "var(--h4)", "over 10 min"],
+];
+const bucket = (v) => BUCKETS.find(b => v >= b[0] && v < b[1]) || BUCKETS[0];
+
+function heat() {
+  const box = $("heat-plot");
+  box.textContent = "";
+  const H2 = FIG.heat, days = H2.days;
+  if (!days.length) { box.innerHTML = '<p class="note">no scored days yet</p>'; return; }
+  $("heat-span").textContent = days[0].day + " to " + days[days.length - 1].day;
+
+  let b0 = Infinity, b1 = -Infinity;
+  for (const d of days) for (const c of d.cells) {
+    if (c[0] < b0) b0 = c[0];
+    if (c[0] > b1) b1 = c[0];
+  }
+  const ncol = b1 - b0 + 1;
+  const L = 104, R = 12, T = 22, B = 26, rowH = 15, gap = 1;
+  const cw = Math.max(7, Math.min(16, (880 - L - R) / ncol));
+  const W = L + R + ncol * cw, H = T + B + days.length * rowH;
+  const svg = el("svg", {viewBox: `0 0 ${W} ${H}`, width: "100%",
+    style: `min-width:${Math.min(760, W)}px`, role: "img",
+    "aria-label": "heatmap of median lateness at Magoun by day and time of day"});
+
+  // hour ticks along the top
+  for (let b = b0; b <= b1; b++) {
+    const s = b * H2.bin_s;
+    if (s % 7200) continue;
+    const xx = L + (b - b0) * cw;
+    const t = el("text", {x: xx, y: 13, "text-anchor": "middle", class: "tick"});
+    t.textContent = hhmm(s % 86400);
+    svg.append(t);
+  }
+
+  const cells = [];
+  days.forEach((d, i) => {
+    const yy = T + i * rowH;
+    const lab = el("text", {x: L - 8, y: yy + rowH - 4, "text-anchor": "end",
+      class: "tick"});
+    lab.textContent = weekday(d.day) + " " + d.day.slice(5);
+    svg.append(lab);
+    if (!d.cells.length) {
+      const t = el("text", {x: L + 4, y: yy + rowH - 4, class: "tick"});
+      t.textContent = "no scheduled trips — all " + d.n + " trains ran as extras";
+      svg.append(t);
+      return;
+    }
+    for (const [b, p50, n] of d.cells) {
+      const rect = el("rect", {x: L + (b - b0) * cw, y: yy,
+        width: cw - gap, height: rowH - gap, rx: 2,
+        fill: bucket(p50)[2], opacity: n === 1 ? 0.55 : 1});
+      cells.push([rect, d, b, p50, n]);
+      svg.append(rect);
+    }
+  });
+  box.append(svg);
+
+  const tip = document.createElement("div");
+  tip.className = "tip";
+  box.append(tip);
+  const r0 = () => svg.getBoundingClientRect();
+  for (const [rect, d, b, p50, n] of cells) {
+    rect.addEventListener("pointerenter", (ev) => {
+      const r = r0();
+      tip.innerHTML = "<b>" + hhmm(b * H2.bin_s % 86400) + "</b> " + weekday(d.day) +
+        " " + d.day + "<br>median <b>" + mmss(p50) + "</b> from " + n +
+        (n === 1 ? " train" : " trains");
+      tip.style.left = Math.min(Math.max(ev.clientX - r.left + 12, 4), r.width - 190) + "px";
+      tip.style.top = Math.max(ev.clientY - r.top - 44, 2) + "px";
+      tip.style.opacity = 1;
+    });
+    rect.addEventListener("pointerleave", () => { tip.style.opacity = 0; });
+  }
+
+  const lg = $("heat-legend");
+  lg.textContent = "";
+  const ramp = document.createElement("span");
+  ramp.className = "ramp";
+  for (const b of BUCKETS) {
+    const i = document.createElement("i");
+    i.style.background = b[2];
+    i.title = b[3];
+    ramp.append(i);
+  }
+  const edges = document.createElement("span");
+  edges.className = "edges";
+  for (const lab of ["−1m", "+1m", "2½m", "5m", "10m"]) {
+    const s = document.createElement("span");
+    s.textContent = lab;
+    edges.append(s);
+  }
+  const cap = document.createElement("span");
+  cap.textContent = "median lateness · a pale cell had one train";
+  lg.append(ramp, edges, cap);
+  heatTable();
+}
+
+// The table view is not an extra: the pale end of the ramp sits under 3:1 against
+// the surface, and the rule for that is a visible relief -- the numbers, in full.
+function heatTable() {
+  const H2 = FIG.heat, days = H2.days;
+  const hours = [];
+  for (let h = 4; h <= 26; h++) hours.push(h);
+  const t = document.createElement("table");
+  const head = document.createElement("tr");
+  head.append(Object.assign(document.createElement("th"), {textContent: "day"}));
+  for (const h of hours) {
+    head.append(Object.assign(document.createElement("th"),
+      {textContent: String(h % 24).padStart(2, "0")}));
+  }
+  head.append(Object.assign(document.createElement("th"), {textContent: "trains"}));
+  head.append(Object.assign(document.createElement("th"), {textContent: "extras"}));
+  t.append(head);
+  for (const d of days) {
+    const row = document.createElement("tr");
+    row.append(Object.assign(document.createElement("td"),
+      {textContent: weekday(d.day) + " " + d.day.slice(5)}));
+    const byHour = new Map();
+    for (const [b, p50] of d.cells) {
+      const h = Math.floor(b * H2.bin_s / 3600);
+      if (!byHour.has(h)) byHour.set(h, []);
+      byHour.get(h).push(p50);
+    }
+    for (const h of hours) {
+      const vs = byHour.get(h);
+      const td = document.createElement("td");
+      if (vs) {
+        vs.sort((a, b) => a - b);
+        const med = vs[Math.floor(vs.length / 2)];
+        td.textContent = Math.round(med / 6) / 10;
+        td.style.color = "var(--ink)";
+      } else {
+        td.textContent = "·";
+        td.style.color = "var(--dim)";
+      }
+      row.append(td);
+    }
+    row.append(Object.assign(document.createElement("td"), {textContent: d.n}));
+    row.append(Object.assign(document.createElement("td"), {textContent: d.added}));
+    t.append(row);
+  }
+  const wrap = $("heat-table");
+  wrap.textContent = "";
+  const cap = document.createElement("p");
+  cap.className = "note";
+  cap.textContent = "Median minutes late per hour. · is an hour with no " +
+    "scheduled train to score. “extras” are ADDED-* trips: real trains " +
+    "with no usable scheduled time, counted here and left out of the map.";
+  wrap.append(cap, t);
+}
+
+function foot() {
+  const H2 = FIG.heat, m = FIG.marey;
+  const added = H2.days.reduce((a, d) => a + d.added, 0);
+  const n = H2.days.reduce((a, d) => a + d.n, 0);
+  const bits = [
+    "The Marey reads the live archive — " + m.days.length +
+      " day" + (m.days.length === 1 ? "" : "s") + " of it, at 15-second resolution — " +
+      "and counts an arrival as a transition into STOPPED_AT.",
+    "The heatmap reads LAMP: " + H2.days.length + " days, " + n +
+      " inbound trains at Magoun, of which " + added + " ran as ADDED-* extras " +
+      "with no scheduled time to be late against.",
+  ];
+  if (H2.missing && H2.missing.length) {
+    bits.push(H2.missing.length + " day" + (H2.missing.length === 1 ? "" : "s") +
+      " inside that span were never downloaded and are not drawn: " +
+      H2.missing.join(", ") + ".");
+  }
+  bits.push('<a href="index.html">back to the board</a>');
+  $("foot").innerHTML = bits.join(" ");
+}
+</script>

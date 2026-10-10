@@ -30,9 +30,10 @@ The publish pipeline (M3). The archive is gitignored and lives here, not in the
 repo, so everything that reads it runs on this host; CI only runs the suite.
 
 ```bash
-./src/daily.sh                                   # rollup, score, suite, origin check
+./src/daily.sh                                   # rollup, score, figures, suite, publish
 uv run --with polars --with numpy python src/stats.py    # score closed days -> data/stats.json
 uv run python src/make_icon.py                   # redraw web/icon-180.png
+uv run --with polars python src/figures.py       # Marey + heatmap -> data/figures.json
 uv run python src/publish.py --check             # is web/ complete and current?
 uv run python src/publish.py --commit            # commit what moved; never pushes
 ./src/refit.sh                                   # rebuild dataset, refit, diff, suite
@@ -58,29 +59,25 @@ that is the only way the rider's phone reaches the backend.
 | `com.magoun.watch` | `watch.sh` → the notifier | yes — no push, no error |
 | `com.magoun.daily` | `daily.sh`, scheduled | no — it leaves a log |
 
-`tailscale serve` maps **one path at a time**, so each allowlisted route needs its
-own line and the proxy ends up enforcing the same line `BROWSER_ROUTES` does. Set
-once, survives reboot, lost if Tailscale is reinstalled or
-`tailscale serve --https=443 off` is run:
+The server listens on two loopback ports. **8723** is private: `/api`, `/board`,
+`/status`, `/history`. **8724** is public and answers only `BROWSER_ROUTES`; anything
+else is a 404 from this process. Tailscale mounts 8724 whole, at its own port, so a
+new allowlisted route is reachable from the phone with no proxy change. Set once,
+survives reboot, lost if Tailscale is reinstalled or `tailscale serve --https=8443 off`
+is run:
 
 ```bash
-tailscale serve --bg --https 443 --set-path /skips   http://127.0.0.1:8723/skips
-tailscale serve --bg --https 443 --set-path /capture http://127.0.0.1:8723/capture
-tailscale serve --bg --https 443 --set-path /today   http://127.0.0.1:8723/today
+tailscale serve --bg --https 8443 http://127.0.0.1:8724
 ```
 
-`/skips` and `/capture` are verified live: 200 with `access-control-allow-origin: *`
-through the proxy, while `/api`, `/status`, `/board` and `/history` answer **404**
-there — but note *why*: `/` on this hostname is mounted to **port 8770, which is a
-different application** (Deck), so an unmapped path is not refused, it is answered
-by that app. A route with no `--set-path` line therefore 404s from somewhere else
-entirely, which looks identical to a backend that is down. `/today` is verified on
-**loopback** — 200, `access-control-allow-origin: *`,
-48 trains scored, 19 ms for a cached hit — but its proxy path is **not set yet**, so
-it is unreachable from the phone until that third line is run and
-`com.magoun.server` is restarted onto the code that serves it. Until then the board
-simply hides the panel, which is what it does off the tailnet anyway. `./ops/status.sh` checks every allowlisted path and every private one, and
-reads both lists out of `server.py` rather than keeping its own copy.
+This replaced one `--set-path` line per route on 443. That host's `/` belongs to a
+different app (Deck, port 8770), so an unmapped path fell through to it and 404'd
+from somewhere else, which looked exactly like a backend that was down. Verified
+live 2026-10-10 through the proxy: `/skips`, `/capture`, `/today` and `/figures` all
+200 with `access-control-allow-origin: *`, and `/api`, `/board`, `/history`,
+`/status` refused. `./ops/status.sh` checks every allowlisted path and every private
+one, on both ports and through the proxy, and reads both lists out of `server.py`
+rather than keeping its own copy.
 
 Secrets live in `ops/secrets.env` (gitignored; `ops/ntfy.env` is the older name and
 is still read). `ops/secrets.env.example` documents all three values. The board
@@ -122,20 +119,41 @@ uv run --with numpy --with gtfs-realtime-bindings python tests/live_notifier.py
   a real no-show, so it names what it could *not* exercise rather than reporting a
   quiet window as success.
 
-The backend serves the board three things it cannot fetch, all allowlisted in
+The backend serves the pages four things they cannot fetch, all allowlisted in
 `server.BROWSER_ROUTES` and all reached at `constants.backend_url`: `/skips` (the
 protobuf-only skip set), `/capture` (when the archive was last appended to, so a
-dead archiver is visible rather than silent) and `/today` (how trains have actually
+dead archiver is visible rather than silent), `/today` (how trains have actually
 run today — aggregates only, never rows, because scoring a day needs the whole
-day's prediction stream and arrivals). Reachable over Tailscale; unreachable is a
-normal state and must not be rendered as failure — each of the three degrades to
-one missing feature, never to a broken board.
+day's prediction stream and arrivals) and `/figures` (the nightly
+`data/figures.json`, handed over as written). Reachable over Tailscale; unreachable
+is a normal state and must not be rendered as failure — each degrades to one
+missing feature, never to a broken board.
 
 `/today` never scores on the request path: this server is single-threaded and the
 board fetches `/skips` in the same tick behind a 2.5 s timeout. It answers from the
 last summary and recomputes behind that, at most once a minute and only when the
 archive has actually grown — so a dead archiver costs nothing, which on a storm
 weekend is the case that matters.
+
+`web/figures.html` is the second page in the origin: a Marey diagram of the
+corridor, the same journeys collapsed onto one Magoun-aligned frame, and the
+lateness heatmap at Magoun -- all drawn from the backend's `/figures`, which
+serves the `data/figures.json` that `src/figures.py` derives and `daily.sh`
+rebuilds. The page reads `backend_url` from `model.js`, so it works from `file://`
+too. Colour carries a measurement on both diagrams: each Marey hop is shaded by which
+fifth of *that hop's own* distribution it landed in (keyed by direction -- pooled,
+the ramp was mostly telling you which way the train was going), and each leg of a
+collapsed journey by whether it was a minute ahead of or behind the typical trip.
+The y axis is a choice between cumulative metres (`data/ref/stops.json`, cached
+from api-v3 `/stops`) and median run time; see architecture.md for why they
+disagree. It publishes **Green-E only**
+(`--routes` puts the rest of the trunk back): D, B and C contribute 400 short
+lines to 175 real ones on this corridor, because B and C only touch its last five
+stations. **Served, not published:** the file changes nightly, and publishing it
+meant a 250 KB commit and push from this Mac every day for data that only exists
+here. `data/figures.json` is gitignored; off the tailnet the page says it cannot
+reach the backend. It draws its own marks in SVG, because a charting library from a
+CDN is a host `test_regressions.ALLOWED_HOSTS` would have to admit.
 
 `web/` **is** the static origin — Pages uploads it as-is. `publish.py` moves files
 and never derives them; `fit.py` and `stats.py` are what write `data/`. `stats.json`
@@ -187,7 +205,38 @@ in `web/` that nothing fetches goes stale there with every test still green.
     printed `p50 -22s` for a train 22 s late for a month, which reads as early.
     `fit.py` flips it once, into a column called `late`, and everything downstream
     reads that.
-12. **Predictions in `data/pairs` past ~20 min are mispairs, not long-range
+12. **`ADDED-*` trips have a `scheduled_arrival_time` in LAMP and it means
+    nothing.** 18.3% of inbound Magoun arrivals over 2026-08-18..09-23 are these
+    unscheduled extras; 88% of them land more than 30 min from their "scheduled"
+    time, against 0.14% of real trips, and they are the entire tail (p1 of the
+    deviation goes from -830 s to -65913 s with them in). Four days —
+    2026-08-22, 08-23, 09-19 and 09-20 — are *entirely* ADDED, so a day can have
+    136 trains and nothing to score. Count them; never average them in, and never
+    drop the day.
+13. **The outbound terminus platform is never reported `STOPPED_AT`.** Over
+    2026-09-24 and 09-26, 70511 appears three times in total: a train arriving at
+    Medford/Tufts is already on 70512 with its next inbound trip on it. The same
+    happens at a short-turn -- on 2026-09-26, 101 of 117 inbound runs ended at
+    North Station and the outbound runs then "began" at Science Park, one stop
+    further on. Anything that walks a vehicle through its day has to join the two
+    directions at the turn, or every outbound trip is missing its last stop.
+14. **A station can be reported `STOPPED_AT` twice in one visit.** A train held at
+    Government Center reported it at 16:28, dropped out of the state, and reported
+    it again at 16:33. Treating the repeat as doubling back cuts the trip in half;
+    it is a hold, and the honest depiction is one longer dwell.
+15. **A schedule snapshot cannot be joined to the archive by `trip_id`.** For
+    2026-09-26 the overlap between the 111 trips in `data/sched_full` and the 127
+    observed inbound E trips is zero: GTFS republishes between the capture and the
+    service day and renumbers every trip. It is a republish, not every day: the
+    snapshots for 2026-10-05 through 10-08 carry the same 147 trip ids, and by
+    17:30 on 10-07, 96 of the 97 trips due to have started had been observed. So
+    a join works on most days and fails whole on the day GTFS republishes, which
+    is the shape that goes unnoticed. Compare schedule and reality as two
+    timelines, not as a join, and never read an unmatched id as a deadhead.
+    `data/blocks` (trip -> block, from 2026-10-05) has the same exposure; each file
+    records when it was `captured`, and 10-05 and 10-06 were backfilled on 10-07.
+    ADDED trips have no block at all.
+16. **Predictions in `data/pairs` past ~20 min are mispairs, not long-range
     predictions.** `rollup` pairs each prediction with that vehicle's *next* arrival,
     so a missed `STOPPED_AT` transition attributes it to the following visit: p50 err
     is −414 s at a 20–30 min lead and −2188 s at 30–45 min, against ~620 s worst
@@ -210,7 +259,8 @@ without anyone noticing.
 - **polars** for anything that ships or is tested; **DuckDB** (`src/q.sh`) for
   ad-hoc questions only — it must stay out of the deploy path.
 - **The backend serves only what a browser cannot fetch.** The board computes its
-  own rows; the one thing it asks for is the protobuf-only skip set. Cross-origin
+  own rows; what it asks for is the allowlisted routes above, none of them
+  computed rows. Cross-origin
   reachability *is* the CORS header, so `server._send` emits it from exactly one
   place, gated on `BROWSER_ROUTES`, and the test asserts that structure — one
   emitting line with the allowlist checked above it. An earlier version of that test
