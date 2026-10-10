@@ -1,2 +1,16 @@
 {"day":"2026-09-24","arrivals":74,"told":74,"caught":68,"riders":122,"platform_wait_sum_s":26026,"door_to_train_sum_s":109715,"walk_s":390,"scored_at":1790462287}
 {"day":"2026-09-25","arrivals":124,"told":124,"caught":113,"riders":240,"platform_wait_sum_s":52869,"door_to_train_sum_s":229481,"walk_s":390,"scored_at":1790462297}
+{"day":"2026-09-26","arrivals":112,"told":111,"caught":64,"riders":244,"platform_wait_sum_s":67628,"door_to_train_sum_s":256931,"walk_s":390,"scored_at":1790523011}
+{"day":"2026-09-27","arrivals":100,"told":100,"caught":47,"riders":232,"platform_wait_sum_s":70099,"door_to_train_sum_s":246826,"walk_s":390,"scored_at":1790609408}
+{"day":"2026-09-28","arrivals":139,"told":139,"caught":73,"riders":234,"platform_wait_sum_s":60126,"door_to_train_sum_s":217733,"walk_s":390,"scored_at":1790695815}
+{"day":"2026-09-29","arrivals":138,"told":138,"caught":66,"riders":233,"platform_wait_sum_s":68570,"door_to_train_sum_s":234587,"walk_s":390,"scored_at":1790782216}
+{"day":"2026-09-30","arrivals":143,"told":143,"caught":79,"riders":234,"platform_wait_sum_s":58206,"door_to_train_sum_s":224814,"walk_s":390,"scored_at":1790868617}
+{"day":"2026-10-01","arrivals":144,"told":144,"caught":75,"riders":233,"platform_wait_sum_s":63290,"door_to_train_sum_s":222416,"walk_s":390,"scored_at":1790955015}
+{"day":"2026-10-02","arrivals":148,"told":148,"caught":74,"riders":233,"platform_wait_sum_s":53375,"door_to_train_sum_s":225210,"walk_s":390,"scored_at":1791041416}
+{"day":"2026-10-03","arrivals":98,"told":98,"caught":60,"riders":231,"platform_wait_sum_s":78249,"door_to_train_sum_s":252110,"walk_s":390,"scored_at":1791127815}
+{"day":"2026-10-04","arrivals":99,"told":99,"caught":54,"riders":0,"platform_wait_sum_s":0,"door_to_train_sum_s":0,"walk_s":390,"scored_at":1791214209}
+{"day":"2026-10-05","arrivals":144,"told":144,"caught":135,"riders":236,"platform_wait_sum_s":32221,"door_to_train_sum_s":196071,"walk_s":390,"scored_at":1791300708}
+{"day":"2026-10-06","arrivals":141,"told":140,"caught":133,"riders":237,"platform_wait_sum_s":32985,"door_to_train_sum_s":198647,"walk_s":390,"scored_at":1791387130}
+{"day":"2026-10-07","arrivals":145,"told":144,"caught":129,"riders":237,"platform_wait_sum_s":35728,"door_to_train_sum_s":204349,"walk_s":390,"scored_at":1791473531}
+{"day":"2026-10-08","arrivals":139,"told":138,"caught":135,"riders":235,"platform_wait_sum_s":37228,"door_to_train_sum_s":206048,"walk_s":390,"scored_at":1791559889}
+{"day":"2026-10-09","arrivals":132,"told":132,"caught":122,"riders":235,"platform_wait_sum_s":44391,"door_to_train_sum_s":221406,"walk_s":390,"scored_at":1791646279}
