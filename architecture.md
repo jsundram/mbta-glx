@@ -134,8 +134,25 @@ point of `BROWSER_ROUTES` is that there is never a second thing.
 { "day": "2026-09-27", "as_of": 1790531972, "ttl_s": 60, "walk_s": 390,
   "close_s": 120, "min_trains": 3, "gap_s": 0, "max_gap_s": 0,
   "trains": 47, "early": 13, "close": 23, "late": 11,
-  "caught": 21, "median_wait_s": 147 }
+  "caught": 21, "missed_close": 14, "median_wait_s": 147,
+  "tail": [{"n": 5,  "trains": 5,  "early": 1, "close": 3, "late": 1,
+            "caught": 4, "missed_close": 1, "median_wait_s": 90},
+           {"n": 10, "trains": 10, ...}] }
 ```
+
+`tail` is the slider: the same tallies over the **last N trains**, so "how have
+the last ten gone" costs no second request and the route still sends aggregates
+and never a train. Rungs wider than the day are not offered; the whole day is the
+far end of the track.
+
+`missed_close` is there because the headline and the bars measure different
+failures, and side by side they read as a contradiction. The bars are about the
+**quote** -- was the time on screen right. `caught` is about the **walk** -- would
+you have been standing there. A timetable-quoted train puts the rider on the
+platform 22 s before the scheduled minute (the fitted q10), so a train half a
+minute early is missed while the bars still call it close: measured on 2026-09-26,
+47 missed and 26 of them inside the +/-2 min band. Without the number, "caught
+57%" beside "18% more than 2 min early" is left for the reader to reconcile.
 
 The panel a rider reads. It replaced a table of MBTA prediction-error quantiles
 binned by lead time, which is a question for whoever is fitting the model — someone

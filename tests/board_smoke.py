@@ -457,7 +457,13 @@ def today_scenario(browser, check) -> None:
                "walk_s": WALK_S, "close_s": 120, "min_trains": 3,
                "gap_s": 0, "max_gap_s": 0, "trains": 47,
                "early": 13, "close": 23, "late": 11,
-               "caught": 21, "median_wait_s": 147}
+               "caught": 21, "missed_close": 14, "median_wait_s": 147,
+               # The slider's rungs: aggregates over the last N trains, oldest
+               # rung first, the whole day implied at the end.
+               "tail": [{"n": 5, "trains": 5, "early": 1, "close": 3, "late": 1,
+                         "caught": 4, "missed_close": 1, "median_wait_s": 90},
+                        {"n": 10, "trains": 10, "early": 2, "close": 6, "late": 2,
+                         "caught": 7, "missed_close": 2, "median_wait_s": 105}]}
 
     def page_with(body, asked):
         page = browser.new_page()
@@ -516,6 +522,29 @@ def today_scenario(browser, check) -> None:
     check("each bucket is drawn as its own bar", len(widths) == 3, str(widths))
     check("and the bars are the percentages, not a fixed shape",
           widths == ["28%", "49%", "23%"], str(widths))
+    # The two numbers measure different failures. Printed side by side without
+    # this clause they read as a contradiction -- "caught 45%" beside "28% more
+    # than 2 min early" -- and the answer is that the rest were early by less.
+    check("it says how many of the misses were near misses",
+          "Of the 26 you would have missed, 14 came within 2 min" in note,
+          note[note.find("Of the"):][:70])
+
+    # The slider: last N trains, scored from the rungs already in the payload.
+    check("the window slider is offered", not page.is_hidden("#histLast"))
+    page.eval_on_selector("#histLast", """e => {
+        e.value = "0";
+        e.dispatchEvent(new Event("input", {bubbles: true}));
+    }""")
+    page.wait_for_timeout(200)
+    w2 = page.inner_text("#histWindow")
+    b2 = page.inner_text("#histBars").replace("\n", " ")
+    check("dragging it scores the last five trains instead of the day",
+          "5 trains" in w2 and "today" not in w2, w2)
+    check("and the bars follow the window, not the day",
+          "80%" in b2 or "60%" in b2, b2[:80])
+    check("with no second request to the backend",
+          sum(1 for u in asked if "/today" in u) <= 2,
+          f"{sum(1 for u in asked if '/today' in u)} /today requests")
     page.close()
 
     # A holed record is not a footnote: arrivals are STOPPED_AT transitions, so a

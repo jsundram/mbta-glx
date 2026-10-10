@@ -152,6 +152,7 @@
   .bell:hover{border-color:var(--go);color:var(--go)}
   .bell.armed{border-color:var(--go);color:var(--card);background:var(--go)}
   .bell:focus-visible{outline:2px solid var(--go);outline-offset:2px}
+  .lastn{width:100%;margin:10px 0 2px;accent-color:var(--go);height:18px}
   .foot{color:var(--dim);font-size:12px;margin-top:14px;line-height:1.6}
   /* The archive is the one loss that cannot be undone, so it gets a colour of
      its own rather than another grey clause nobody reads. */
@@ -226,19 +227,24 @@
   <div class="hist" id="hist" hidden>
     <h2><span>How trains have run</span><em id="histWindow">&nbsp;</em></h2>
     <div class="bars" id="histBars"></div>
+    <!-- How much of the day to score. It steps along the rungs /today sends --
+         aggregates over the last N trains, never the trains themselves -- so
+         dragging it costs no request and the backend still hands out no rows. -->
+    <input class="lastn" id="histLast" type="range" min="0" max="0" value="0"
+           step="1" hidden aria-label="how many of the most recent trains to score">
     <p class="histnote" id="histNote"></p>
   </div>
   <div class="foot" id="foot"></div>
+  <!-- Outside .foot for the same reason the settings link is: paint() rebuilds
+       that innerHTML every 250 ms. The figures are the archive rather than the
+       next train, so they are a link off the board, not a panel on it. -->
+  <a class="setlink" href="figures.html">how the line ran</a>
   <button class="setlink" id="setlink" aria-expanded="false"
           aria-controls="panel">settings</button>
   <!-- Four things, all of them this device's rather than this board's: the walk the
        alert is aimed off, where that alert goes, and a key for when MBTA is
        rate-limiting this address. The topic is one person's phone and the key is one
        person's quota, and this page is served from a public origin -- so none of it
-  <!-- Outside .foot for the same reason the settings link is: paint() rebuilds
-       that innerHTML every 250 ms. The figures are the archive rather than the
-       next train, so they are a link off the board, not a panel on it. -->
-  <a class="setlink" href="figures.html">how the line ran</a>
        is in the page, the repo or model.json. It is typed into this browser and
        stays there. -->
   <div class="panel" id="panel" hidden>
@@ -846,12 +852,43 @@ async function todayPanel() {
   if (!base) return;
   try {
     const walk = (Magoun.walkSeconds() / 60).toFixed(2);
-    const d = await (await fetch(`${base}/today?walk=${walk}`,
+    const day = await (await fetch(`${base}/today?walk=${walk}`,
       {cache: "no-store", signal: AbortSignal.timeout(4000)})).json();
     // Under a handful of trains a percentage is a rounding artifact wearing a
     // measurement's clothes: at 06:05 two trains have run and one of them is 50%.
     // `trains` is also 0 when the backend has not finished its first pass.
-    if (!d.trains || d.trains < (d.min_trains || 3)) { $("#hist").hidden = true; return; }
+    if (!day.trains || day.trains < (day.min_trains || 3)) {
+      $("#hist").hidden = true;
+      return;
+    }
+    // The rungs of the slider: each tail window, then the whole day. Every rung
+    // is a COMPLETE summary -- the day's own fields with that window's counts over
+    // them -- so everything below reads one object and tests/test_stats.py can
+    // still pin every field the panel touches.
+    const rungs = [...(day.tail || []).map(t => ({...day, ...t})), day];
+    const bar = $("#histLast");
+    bar.max = rungs.length - 1;
+    bar.hidden = rungs.length < 2;
+    // Sticky by train count, not by index: a rung appears as the day fills up, and
+    // an index would silently slide the reader onto a different window.
+    let at = rungs.findIndex(r => r.trains === histLastN);
+    if (at < 0) at = rungs.length - 1;
+    bar.value = at;
+    bar.oninput = () => {
+      const i = +bar.value;
+      histLastN = i === rungs.length - 1 ? null : rungs[i].trains;
+      drawToday(rungs[i], i === rungs.length - 1);
+    };
+    drawToday(rungs[at], at === rungs.length - 1);
+    $("#hist").hidden = false;
+  } catch (e) { $("#hist").hidden = true; }
+}
+
+// Which window the reader last chose, by train count. Survives the 60 s refresh;
+// null is the whole day.
+let histLastN = null;
+
+function drawToday(d, whole) {
     const pct = n => Math.round(100 * n / d.trains);
     // The three buckets partition the trains, so the three percentages have to add
     // up: rounded independently they print as 99% or 101%, and a rider reading
@@ -868,8 +905,9 @@ async function todayPanel() {
     const near = +(d.close_s / 60).toFixed(1);
     const gap = Math.round((d.gap_s || 0) / 60);
     $("#histWindow").textContent =
-      `today \u00b7 ${d.trains} train${d.trains === 1 ? "" : "s"}`
-      + (d.gap_s >= 120 ? ` \u00b7 ${gap} min not recorded` : "");
+      (whole ? `today \u00b7 ${d.trains} train` : `last ${d.trains} train`)
+      + (d.trains === 1 ? "" : "s")
+      + (whole && d.gap_s >= 120 ? ` \u00b7 ${gap} min not recorded` : "");
     $("#histBars").innerHTML = [
       ["early", `more than ${near} min early`, d.early],
       ["close", `within ${near} min`, d.close],
@@ -879,15 +917,26 @@ async function todayPanel() {
       + `<b>${share[i]}%</b></div><div class="btrack">`
       + `<div class="bfill ${cls}" style="width:${share[i]}%" `
       + `title="${n} of ${d.trains}"></div></div></div>`).join("");
+    // The two numbers measure different failures, and side by side they read as a
+    // contradiction: "caught 57%" beside "18% more than 2 min early" invites the
+    // question "so where did the other 25% go?". They went early by LESS than two
+    // minutes -- which the bars call close and the walk calls missed, because a
+    // timetable-quoted train puts you on the platform 22 s before the scheduled
+    // minute. So the panel says that out loud rather than leaving it to be
+    // reconciled.
+    const gone = d.trains - d.caught;
     $("#histNote").innerHTML =
       `Leaving when this board said would have caught <b>${pct(d.caught)}%</b> of them`
       + (d.median_wait_s == null ? "."
          : `, after <b>${(d.median_wait_s / 60).toFixed(1)} min</b> on the platform.`)
+      + (gone && d.missed_close
+         ? ` Of the ${gone} you would have missed, <b>${d.missed_close}</b> came `
+           + `within ${near} min of the time quoted &mdash; caught is about the `
+           + `walk, the bars are about the quote.`
+         : "")
       + `<span class="how">Each train is measured against the time this board was `
       + `quoting when it told you to leave &mdash; not against MBTA's last word `
       + `thirty seconds out, which is always right and never useful.</span>`;
-    $("#hist").hidden = false;
-  } catch (e) { $("#hist").hidden = true; }
 }
 
 // The one real change from src/status.html: app.js polls MBTA and computes the

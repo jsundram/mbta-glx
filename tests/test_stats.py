@@ -37,13 +37,23 @@ CONTRACT = {"as_of", "window_days", "caught", "of", "mean_platform_wait_s",
 BIN_CONTRACT = {"bin", "n", "p10", "p50", "p90"}
 
 
+# The reader of /today is two functions now: todayPanel() fetches it and picks the
+# window the slider is on, drawToday() renders that window. Both have to be in
+# scope here -- scanning one of them would pin half the contract and quietly stop
+# noticing the other half.
+PANEL_FUNCS = ("async function todayPanel()", "function drawToday(")
+
+
 def _panel_source() -> str:
-    """The body of index.html's todayPanel(), which is the only reader of /today."""
+    """The body of every function in index.html that reads /today."""
     src = BOARD.read_text()
-    i = src.index("async function todayPanel()")
-    # The function is at top level, so the first line-initial "}" closes it.
-    j = src.index("\n}", i)
-    return src[i:j]
+    out = []
+    for name in PANEL_FUNCS:
+        # .index raises if the reader was renamed away, which is the loud failure
+        # this wants: a pin that silently finds nothing passes everything.
+        i = src.index(name)
+        out.append(src[i:src.index("\n}", i)])
+    return "\n".join(out)
 
 
 def _scored(arrival, predicted, *, caught=True, wait=60.0):
@@ -71,6 +81,66 @@ def test_every_field_the_panel_reads_is_in_the_payload():
     got = set(server.today_summary([], "2026-09-27", 390, 0.0))
     assert want <= got, \
         f"the panel reads fields /today does not send: {sorted(want - got)}"
+
+
+def test_the_tail_rungs_are_the_tail_and_nothing_wider():
+    """The slider steps over aggregates, not rows: /today still sends no trains.
+
+    A rung as wide as the day is a slider position that does nothing, so it is not
+    offered -- the whole day is the far end of the track, added by the board.
+    """
+    rows = [_scored(1000 + 100 * i, 1000 + 100 * i) for i in range(12)]
+    d = server.today_summary(rows, "2026-09-27", 390, 1.0)
+    assert [t["n"] for t in d["tail"]] == [5, 10], "the rungs are not the tail steps"
+    assert all(t["n"] == t["trains"] for t in d["tail"])
+    assert all(t["n"] < d["trains"] for t in d["tail"])
+    # And each rung is the LAST n, not the first: the newest train is in every one.
+    newest = rows[-1]["arrival"]
+    for n in (5, 10):
+        window = server.today_summary(rows[-n:], "2026-09-27", 390, 1.0)
+        rung = next(t for t in d["tail"] if t["n"] == n)
+        assert {k: rung[k] for k in ("early", "close", "late", "caught")} == \
+            {k: window[k] for k in ("early", "close", "late", "caught")}
+    assert rows[-1]["arrival"] == newest
+
+
+def test_a_rung_carries_no_rows():
+    """The architecture rule, mechanically: aggregates only, never a train."""
+    rows = [_scored(1000 + 100 * i, 1000 + 100 * i) for i in range(12)]
+    d = server.today_summary(rows, "2026-09-27", 390, 1.0)
+    fields = {k for t in d["tail"] for k in t}
+    assert fields <= {"n", "trains", "early", "close", "late", "caught",
+                      "missed_close", "median_wait_s"}, \
+        f"a rung grew a field that is not a tally: {sorted(fields)}"
+
+
+def test_a_near_miss_is_counted_as_one():
+    """The number that answers "caught 48% but only 16% early -- where did the
+    rest go": early by less than the bar's own threshold.
+
+    A train quoted from the timetable puts the rider on the platform 22 s before
+    the scheduled minute, so one that turns up half a minute early is missed while
+    the bars still call it close. Measured on 2026-09-26: 47 missed, 26 of them
+    inside the band.
+    """
+    rows = [_scored(1000, 1030, caught=False, wait=-30.0),   # 30 s early: near miss
+            _scored(2000, 2400, caught=False, wait=-400.0),  # 400 s early: not near
+            _scored(3000, 3000, caught=True, wait=60.0)]     # caught
+    d = server.today_summary(rows, "2026-09-27", 390, 1.0)
+    assert (d["caught"], d["missed_close"]) == (1, 1)
+    # And this is the whole paradox in one row: the near miss is counted in the
+    # CLOSE bar while being one of the trains you did not catch. The bars are
+    # about the quote, `caught` is about the walk.
+    assert (d["early"], d["close"], d["late"]) == (1, 2, 0)
+    assert d["missed_close"] <= d["trains"] - d["caught"]
+
+
+def test_the_panel_reads_the_rungs_rather_than_asking_again():
+    """A slider that re-fetches on every drag is a slider on a tailnet round trip."""
+    src = _panel_source()
+    assert "d.tail" in src or "day.tail" in src, "the panel ignores the rungs"
+    assert src.count("fetch(") == 1, "the panel fetches more than once"
+    assert "histLast" in src, "nothing drives the window slider"
 
 
 def test_the_panel_hides_itself_below_a_handful_of_trains():

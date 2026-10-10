@@ -138,25 +138,57 @@ _today: dict[tuple[str, int], dict] = {}
 _today_running: set[tuple[str, int]] = set()
 
 
+# The ladder the board's "last N trains" slider steps along. Aggregates, not rows:
+# each rung is the same summary over the tail of the day, so the slider needs no
+# further request and /today still never sends a train.
+TAIL_STEPS = (5, 10, 20, 40, 80)
+
+
+def _counts(told: list[dict], close_s: int) -> dict:
+    """The tallies, over whichever trains are handed in.
+
+    The three buckets partition: `err < -close`, `|err| <= close`, `err > close`,
+    summing to `trains`. The median wait is over the trains that were CAUGHT; a
+    missed train has a negative wait, and mixing those in makes a bad morning
+    produce a small reassuring median.
+
+    `missed_close` exists because the headline and the bars measure different
+    failures and the gap between them reads as a contradiction. The bars are about
+    the QUOTE -- was the time on screen right. `caught` is about the WALK -- would
+    you have been standing there. A train quoted from the timetable puts you on the
+    platform 22 s before the scheduled minute (the fitted q10), so one that turns
+    up half a minute early is missed while still sitting inside the +/-2 min "close"
+    bar. Measured on 2026-09-26: 47 missed, 26 of them inside that bar. Without
+    this number the panel says "caught 57%" beside "18% more than 2 min early" and
+    leaves the reader to reconcile them.
+    """
+    err = [r["arrival"] - r["predicted"] for r in told]
+    waits = [r["wait_s"] for r in told if r["caught"]]
+    missed = [r for r in told if not r["caught"]]
+    return {
+        "trains": len(told),
+        "early": sum(1 for e in err if e < -close_s),
+        "close": sum(1 for e in err if abs(e) <= close_s),
+        "late": sum(1 for e in err if e > close_s),
+        "caught": sum(1 for r in told if r["caught"]),
+        "missed_close": sum(1 for r in missed
+                            if abs(r["arrival"] - r["predicted"]) <= close_s),
+        "median_wait_s": round(statistics.median(waits)) if waits else None,
+    }
+
+
 def today_summary(rows: list[dict], day: str, walk: int, as_of: float,
                   close_s: int = TODAY_CLOSE_S,
                   gaps: tuple[int, int] = (0, 0)) -> dict:
-    """The four things the board says about today, from replay.score's rows. Pure.
+    """What the board says about today, from replay.score's rows. Pure.
 
     Scored at the moment the rider ACTS, which is the whole point: `predicted` is
     the ETA that was on screen when leave-now fired, not MBTA's last word thirty
     seconds before the train, which is always accurate and never useful. So "early"
     means the train beat the time you were quoted -- the failure that leaves you
     watching it go -- and "late" means you stood there longer than you were told.
-
-    The three buckets partition: `err < -close`, `|err| <= close`, `err > close`,
-    summing to `trains`. The median wait is over the trains that were CAUGHT; a
-    missed train has a negative wait, and mixing those in makes a bad morning
-    produce a small reassuring median.
     """
     told = [r for r in rows if r["told"] is not None]
-    err = [r["arrival"] - r["predicted"] for r in told]
-    waits = [r["wait_s"] for r in told if r["caught"]]
     return {
         "day": day, "as_of": as_of, "ttl_s": TODAY_MIN_INTERVAL_S, "walk_s": walk,
         "close_s": close_s, "min_trains": TODAY_MIN_TRAINS,
@@ -164,12 +196,11 @@ def today_summary(rows: list[dict], day: str, walk: int, as_of: float,
         # part of it that was recorded, and the board says so rather than implying
         # it watched the whole day.
         "gap_s": gaps[0], "max_gap_s": gaps[1],
-        "trains": len(told),
-        "early": sum(1 for e in err if e < -close_s),
-        "close": sum(1 for e in err if abs(e) <= close_s),
-        "late": sum(1 for e in err if e > close_s),
-        "caught": sum(1 for r in told if r["caught"]),
-        "median_wait_s": round(statistics.median(waits)) if waits else None,
+        **_counts(told, close_s),
+        # Oldest rung first, and only rungs with fewer trains than the day has --
+        # a "last 40" that is the whole day is a slider position that does nothing.
+        "tail": [{"n": n, **_counts(told[-n:], close_s)}
+                 for n in TAIL_STEPS if n < len(told)],
     }
 
 
