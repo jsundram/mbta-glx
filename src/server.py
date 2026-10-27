@@ -411,7 +411,7 @@ class Handler(BaseHTTPRequestHandler):
                     "stops": [n for n, _, _ in service.GLX_STOPS],
                     "recent": _arrivals.recent[-5:],
                     "alerts": [a for a in service.relevant()
-                               if (a["severity"] or 0) >= 5][:3],
+                               if (a["severity"] or 0) >= 5],
                     "headway_median_s": _model.headway,
                 }).encode()
                 self._send(200, "application/json", body)

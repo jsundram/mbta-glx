@@ -162,42 +162,49 @@ const $ = s => document.querySelector(s);
 let data = null, lastOk = 0, version = null, dueLatch = null;
 
 // ---- the service alert ----
-// A copy of web/app.js's banner(): this page does not load app.js. The backend's
+// A copy of web/app.js's banners(): this page does not load app.js. The backend's
 // alerts carry `periods` as [start, end] ISO pairs, the same shape.
 const serviceDay = t => new Date((t - 3 * 3600) * 1000).toLocaleDateString(
   "en-US", {timeZone: "America/New_York", month: "numeric", day: "numeric"});
 const isoS = v => (v ? Date.parse(v) / 1000 : null);
-function banner(alerts, now) {
+function banners(alerts, now) {
   const shown = ["SUSPENSION", "STATION_CLOSURE", "NO_SERVICE", "SHUTTLE", "DETOUR"];
   const live = (alerts || []).filter(a => shown.includes(a.effect)).map(a => {
+    // The period it is in now, or enters next. One with no periods is in force.
     const ps = (a.periods || []).map(([s, e]) => [isoS(s), isoS(e)]);
     const p = ps.length ? ps.find(([, e]) => e == null || e > now) : [null, null];
     return p && {a: a, start: p[0], end: p[1]};
   }).filter(Boolean);
-  if (!live.length) return null;
   live.sort((x, y) => (x.start ?? -Infinity) - (y.start ?? -Infinity)
                       || (y.a.severity || 0) - (x.a.severity || 0));
-  const {a, start, end} = live[0];
-  const name = a.effect.charAt(0) + a.effect.slice(1).toLowerCase().replace(/_/g, " ");
-  let when = "";
-  if (start != null && end != null) {
-    const d0 = serviceDay(start), d1 = serviceDay(end - 1);
-    when = d0 === d1 ? ` ${d0}` : ` ${d0}\u2013${d1}`;
-  } else if (end != null) {
-    when = ` through ${serviceDay(end - 1)}`;
-  } else if (start != null) {
-    when = start > now ? ` from ${serviceDay(start)}` : ` since ${serviceDay(start)}`;
-  }
-  return {id: a.id, title: name + when, text: a.header || a.short || ""};
+  const inForce = live.filter(x => x.start == null || x.start <= now);
+  const next = live.find(x => x.start != null && x.start > now);
+  return inForce.concat(next ? [next] : []).map(({a, start, end}) => {
+    // A closure names its station ("Lechmere closed"); "Station closure" alone
+    // does not say whether it is yours. A suspension's own phrase is just
+    // "Suspension of service on Green Line", so the effect reads better there.
+    const name = (a.effect === "STATION_CLOSURE" && a.short) ||
+      a.effect.charAt(0) + a.effect.slice(1).toLowerCase().replace(/_/g, " ");
+    let when = "";
+    if (start != null && end != null) {
+      const d0 = serviceDay(start), d1 = serviceDay(end - 1);
+      when = d0 === d1 ? ` ${d0}` : ` ${d0}\u2013${d1}`;
+    } else if (end != null) {
+      when = ` through ${serviceDay(end - 1)}`;
+    } else if (start != null) {
+      when = start > now ? ` from ${serviceDay(start)}` : ` since ${serviceDay(start)}`;
+    }
+    return {id: a.id, title: name + when, text: a.header || a.short || ""};
+  });
 }
-function showBanner(b) {
-  const box = $("#alerts"), key = b ? [b.id, b.title, b.text].join("|") : "";
+function showBanners(bs) {
+  const box = $("#alerts"), key = JSON.stringify(bs);
   if (box.dataset.key === key) return;
-  const was = box.querySelector("details");
-  const open = b && was && was.dataset.id === b.id && was.open;
+  const open = new Set([...box.querySelectorAll("details[open]")].map(d => d.dataset.id));
   box.dataset.key = key;
-  box.innerHTML = b ? `<details class="alert" data-id="${b.id}"${open ? " open" : ""}>`
-    + `<summary>${b.title}</summary>${b.text}</details>` : "";
+  box.innerHTML = bs.map(b =>
+    `<details class="alert" data-id="${b.id}"${open.has(b.id) ? " open" : ""}>`
+    + `<summary>${b.title}</summary>${b.text}</details>`).join("");
 }
 
 // ---- push, with no backend involved ----
@@ -327,7 +334,7 @@ function paint() {
     $("#heroBig").textContent = "—";
     $("#heroSub").textContent = "nothing predicted";
   }
-  showBanner(banner(data.alerts, now));
+  showBanners(banners(data.alerts, now));
   // Once the armed train has gone, disarm. There is no re-pointing to do: a
   // scheduled ntfy message cannot be moved, only added to.
   if (armed) {

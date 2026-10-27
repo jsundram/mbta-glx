@@ -572,16 +572,16 @@ const placeOf = r => (r.vehicle && whereIs(r.vehicle))
 const spread = r => (r.hi - r.lo) < 60 ? ""
   : `earliest ${hm(r.lo)}, latest ${hm(r.hi)}`;
 
-/** The service alert, collapsed to its title until tapped. Re-rendered every tick,
- *  so an open one is kept open rather than snapping shut under the rider's finger. */
-function showBanner(b) {
-  const box = $("#alerts"), key = b ? [b.id, b.title, b.text].join("|") : "";
+/** Service alerts, each collapsed to its title until tapped. paint() runs every
+ *  tick, so this redraws only when the alerts change, and keeps open what was open. */
+function showBanners(bs) {
+  const box = $("#alerts"), key = JSON.stringify(bs);
   if (box.dataset.key === key) return;
-  const was = box.querySelector("details");
-  const open = b && was && was.dataset.id === b.id && was.open;
+  const open = new Set([...box.querySelectorAll("details[open]")].map(d => d.dataset.id));
   box.dataset.key = key;
-  box.innerHTML = b ? `<details class="alert" data-id="${b.id}"${open ? " open" : ""}>`
-    + `<summary>${b.title}</summary>${b.text}</details>` : "";
+  box.innerHTML = bs.map(b =>
+    `<details class="alert" data-id="${b.id}"${open.has(b.id) ? " open" : ""}>`
+    + `<summary>${b.title}</summary>${b.text}</details>`).join("");
 }
 
 /** One alert at a time, shown on whichever train it was set for.
@@ -678,7 +678,7 @@ function paint() {
     $("#heroSub").textContent = "nothing predicted";
     $("#heroWho").innerHTML = "";
   }
-  showBanner(Magoun.banner(data.alerts, now));
+  showBanners(Magoun.banners(data.alerts, now));
   // The armed train has come and gone: the rider is on it, or it is moot either
   // way. Disarm, and say so, or the notifier keeps working on a finished trip.
   if (armed) {

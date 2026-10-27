@@ -382,25 +382,34 @@ def test_javascript_reads_its_constants_from_the_model():
 
 
 @needs_node
-def test_the_board_shows_one_alert_with_its_dates():
+def test_the_board_shows_alerts_in_force_and_the_next_one():
     """Two suspensions a week apart rendered as two near-identical red boxes, each
-    titled "upcoming" with the dates buried in the text. One banner, the soonest,
-    with its service days in the title -- and an ended one is gone, not "in force".
+    titled "upcoming" with the dates buried in the text. Now: every alert in force,
+    then only the next to start, each with its service days in the title -- and an
+    ended one is gone, not "in force". A closure is titled by its station.
     """
     alerts = [
         {"id": "b", "effect": "SUSPENSION", "severity": 7,
          "periods": [["2026-11-07T03:00:00-05:00", "2026-11-16T03:00:00-05:00"]]},
         {"id": "a", "effect": "SUSPENSION", "severity": 7,
          "periods": [["2026-10-31T03:00:00-04:00", "2026-11-02T03:00:00-05:00"]]},
+        {"id": "d", "effect": "STATION_CLOSURE", "severity": 7,
+         "short": "Lechmere closed",
+         "periods": [["2026-10-19T03:00:00-04:00", None]]},
+        {"id": "e", "effect": "STATION_CLOSURE", "severity": 7,
+         "periods": [["2026-10-19T03:00:00-04:00", "2026-10-22T03:00:00-04:00"]]},
         {"id": "c", "effect": "ELEVATOR_CLOSURE", "severity": 9, "periods": []},
     ]
-    at = {"2026-10-27T12:00:00-04:00": "Suspension 10/31–11/1",
-          "2026-11-02T12:00:00-05:00": "Suspension 11/7–11/15",
-          "2026-11-20T12:00:00-05:00": None}
+    closed = "Lechmere closed since 10/19"
+    at = {"2026-10-27T12:00:00-04:00": [closed, "Suspension 10/31\u201311/1"],
+          "2026-10-31T12:00:00-04:00": [closed, "Suspension 10/31\u201311/1",
+                                        "Suspension 11/7\u201311/15"],
+          "2026-11-02T12:00:00-05:00": [closed, "Suspension 11/7\u201311/15"],
+          "2026-11-20T12:00:00-05:00": [closed]}
     js = (f"const M = require({json.dumps(str(service.ROOT / 'web' / 'app.js'))});"
           f"const al = {json.dumps(alerts)};"
           f"console.log(JSON.stringify({json.dumps(list(at))}.map(d =>"
-          f" (M.banner(al, Date.parse(d) / 1000) || {{}}).title ?? null)));")
+          f" M.banners(al, Date.parse(d) / 1000).map(b => b.title))));")
     out = subprocess.run([_node(), "-e", js], capture_output=True, text=True,
                          timeout=60)
     assert out.returncode == 0, out.stderr
