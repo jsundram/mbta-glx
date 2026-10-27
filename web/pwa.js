@@ -17,7 +17,7 @@
  */
 (function () {
   const VER_PREFIX = "magoun-v";   // sw.js's V stem
-  const APP_V = "magoun-v5";       // = sw.js's V; src/pwa_version.py moves both together
+  const APP_V = "magoun-v6";       // = sw.js's V; src/pwa_version.py moves both together
 
   /** Show the tag when the server is ahead of the code running here. Returns
    *  whether it is, so pull-to-refresh can apply the update instead of polling. */
