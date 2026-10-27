@@ -14,7 +14,7 @@ it is fetched, and so is the home-screen icon; that half is the only run that ta
 either branch. The self-score panel is neither: it asks the backend how trains have
 run today, and today is a question no published file can answer.
 
-Not collected by pytest on purpose: it needs playwright, a browser and ~90 s. How
+Not collected by pytest on purpose: it needs playwright and two browsers. How
 to run it is in CLAUDE.md, "Checks the suite cannot do".
 """
 import argparse
@@ -73,6 +73,49 @@ def schedule_body(slots) -> dict:
 BACKEND_HOST = re.escape(
     json.loads((ROOT / "web" / "model.json").read_text())
     ["constants"]["backend_url"].split("/")[2])
+POLL_MS = 10000          # app.js's POLL_MS
+
+
+# Waiting. Nearly all of this file's runtime used to be flat sleeps: 5-6 s after
+# every load, and real minutes for the 60 s re-arm, the 10 s poll and the 429
+# backoff. A load now waits for the first poll to paint, and a scenario that needs
+# time to pass installs playwright's clock before goto and steps it one poll at a
+# time. Every timer the board keeps reads Date.now(), which the clock replaces, and
+# it starts at the real now, so the shifted fixtures are still in the future.
+
+def until(page, js: str, timeout_ms: int = 8000) -> bool:
+    """Wait for a page expression to hold. False on timeout: the check that
+    follows is the finding, so a miss must not raise past it."""
+    try:
+        page.wait_for_function(js, timeout=timeout_ms)
+        return True
+    except Exception:  # noqa: BLE001 - a timeout is the finding, not a crash
+        return False
+
+
+def until_py(page, pred, timeout_ms: int = 8000) -> bool:
+    """until(), for a condition on what the routes have recorded."""
+    for _ in range(timeout_ms // 50):
+        if pred():
+            return True
+        page.wait_for_timeout(50)
+    return pred()
+
+
+def loaded(page) -> bool:
+    """The first poll has landed and painted. onData sets `data`, and tick awaits
+    the skip and capture fetches before it calls onData, so those are in too.
+    `data` is a top-level let, which throws rather than reads undefined before its
+    script has run."""
+    return until(page, "(() => { try { return data !== null; } catch (e) { return false; } })()",
+                 15000)
+
+
+def next_poll(page) -> bool:
+    """Advance the fake clock one poll and wait for that poll to paint."""
+    before = page.evaluate("lastOk")
+    page.clock.run_for(POLL_MS)
+    return until(page, f"lastOk > {before}", 5000)
 
 
 def stub(page, live):
@@ -112,7 +155,7 @@ def dwell_scenario(browser, check) -> None:
     stub(page, live)
     page.route(re.compile(r"ntfy\.sh"), lambda r: r.fulfill(status=200, json={}))
     page.goto(BOARD)
-    page.wait_for_timeout(5000)
+    loaded(page)
     label = page.inner_text("#heroLabel").strip()
     big = page.inner_text("#heroBig").strip()
     print(f"\n  replaying {index} (a train stopped at Magoun)")
@@ -182,7 +225,7 @@ def skip_scenario(browser, check) -> None:
 
     page.route(re.compile(host), backend)
     page.goto(BOARD)
-    page.wait_for_timeout(6000)
+    loaded(page)
 
     print(f"\n  replaying {index} with the skip endpoint answering")
     check("the board asked the published endpoint for the skip set",
@@ -206,7 +249,7 @@ def skip_scenario(browser, check) -> None:
     errs = []
     page2.on("pageerror", lambda e: errs.append(str(e)[:150]))
     page2.goto(BOARD)
-    page2.wait_for_timeout(6000)
+    loaded(page2)
     check("with the endpoint unreachable the board still paints",
           bool(page2.inner_text("#heroBig").strip()) and not errs,
           "; ".join(errs[:2]))
@@ -254,8 +297,11 @@ def ratelimit_scenario(browser, check) -> None:
 
     page.route(re.compile(r"api-v3\.mbta\.com"), v3)
     page.route(re.compile(r"ntfy\.sh"), lambda r: r.fulfill(status=200, json={}))
+    page.clock.install()
     page.goto(BOARD)
-    page.wait_for_timeout(5000)
+    # No poll ever succeeds here, so loaded() would never hold.
+    until(page, "document.querySelector('#foot').innerText.toLowerCase()"
+                ".includes('rate-limiting')")
 
     print("\n  api-v3 answering 429")
     foot = page.inner_text("#foot")
@@ -266,7 +312,8 @@ def ratelimit_scenario(browser, check) -> None:
 
     # Hammering a limit you are already over keeps you over it.
     before = len(seen_keys)
-    page.wait_for_timeout(12000)
+    page.clock.run_for(12000)
+    page.wait_for_timeout(300)     # real time, for any request that tick did make
     check("it backs off instead of retrying every poll",
           len(seen_keys) - before == 0,
           f"{len(seen_keys) - before} more requests in 12 s at a 10 s poll")
@@ -274,7 +321,11 @@ def ratelimit_scenario(browser, check) -> None:
     limited["on"] = False
     page.fill("#keyin", "smoke-test-key")
     page.click("#keyask button")
-    page.wait_for_timeout(4000)
+    loaded(page)
+    # tick clears its error only after onData has painted, so the warning goes on
+    # the next 250 ms paint, not the one the first good poll makes.
+    until(page, "!document.querySelector('#foot').innerText.toLowerCase()"
+                ".includes('rate-limiting')", 3000)
     check("saving a key retries at once rather than serving out the backoff",
           len(seen_keys) > before, f"{len(seen_keys) - before} requests after save")
     check("and the key is actually sent", seen_keys and seen_keys[-1],
@@ -312,13 +363,14 @@ def capture_scenario(browser, check) -> None:
                       body=json.dumps(capture_body if r.request.url.endswith("/capture")
                                       else {"as_of": time.time(), "trips": [],
                                             "ttl_s": 60}))))
+        page.clock.install()
         page.goto(BOARD)
-        page.wait_for_timeout(6000)
+        loaded(page)
         first = page.inner_text("#foot")
         # The warning needs two consecutive bad reads, so a second poll is
         # required before it can appear at all -- see below.
         if two_polls:
-            page.wait_for_timeout(11000)
+            next_poll(page)
         foot = page.inner_text("#foot")
         page.close()
         print(f"  {label}: {foot[:130]}")
@@ -375,7 +427,7 @@ def _settings_page(browser, live, seed: str):
     dialogs = []
     page.on("dialog", lambda d: (dialogs.append(d.message), d.dismiss()))
     page.goto(BOARD)
-    page.wait_for_timeout(5000)
+    loaded(page)
     return page, posts, dialogs
 
 
@@ -399,7 +451,7 @@ def firstrun_scenario(browser, check) -> None:
     check("and the board still works with no settings at all",
           page.eval_on_selector_all(".row", "e => e.length") >= 1)
     page.click("#bell")
-    page.wait_for_timeout(500)
+    until(page, "!document.querySelector('#panel').hidden", 3000)
     check("the bell opens the settings rather than a native prompt",
           not page.is_hidden("#panel") and not dialogs,
           f"{len(dialogs)} dialog(s)")
@@ -414,7 +466,7 @@ def firstrun_scenario(browser, check) -> None:
     page.fill("#setwalk", "9")
     page.fill("#setntfy", "smoke-firstrun")
     page.click("#setform button[type=submit]")
-    page.wait_for_timeout(500)
+    until(page, "localStorage.getItem('magoun.walk') === '540'", 3000)
     check("saving stores the walk in seconds",
           page.evaluate("localStorage.getItem('magoun.walk')") == "540",
           str(page.evaluate("localStorage.getItem('magoun.walk')")))
@@ -422,7 +474,7 @@ def firstrun_scenario(browser, check) -> None:
           page.evaluate("Magoun.walkSeconds()") == 540)
     page.click("#setclose")
     page.click("#bell")
-    page.wait_for_timeout(1500)
+    until_py(page, lambda: any("smoke-firstrun" in u for u in posts), 3000)
     sched = [u for u in posts if "smoke-firstrun" in u]
     check("the bell then arms, to the topic just entered", len(sched) >= 1,
           f"{len(posts)} posts")
@@ -480,7 +532,13 @@ def today_scenario(browser, check) -> None:
                                            "ttl_s": 60, "stale_after_s": 600}))
         page.route(re.compile(host), backend)
         page.goto(BOARD)
-        page.wait_for_timeout(6000)
+        loaded(page)
+        # onData asks for /today after it paints, so the panel lands a moment
+        # later -- and three of the four cases end with it hidden, which is also
+        # how it starts, so there is no DOM change to wait for. Wait for the ask,
+        # then for its answer to render.
+        until_py(page, lambda: any("/today" in u for u in asked), 3000)
+        page.wait_for_timeout(500)
         return page
 
     asked = []
@@ -530,7 +588,8 @@ def today_scenario(browser, check) -> None:
         e.value = "0";
         e.dispatchEvent(new Event("input", {bubbles: true}));
     }""")
-    page.wait_for_timeout(200)
+    until(page, "document.querySelector('#histWindow').innerText.includes('5 trains')",
+          3000)
     w2 = page.inner_text("#histWindow")
     b2 = page.inner_text("#histBars").replace("\n", " ")
     check("dragging it scores the last five trains instead of the day",
@@ -588,7 +647,7 @@ def upgrade_scenario(browser, check) -> None:
     """)
     print("\n  a board set up before the handoff existed")
     page.click("#bell")
-    page.wait_for_timeout(500)
+    until(page, "!document.querySelector('#panel').hidden", 3000)
     check("it asks an existing install for the command topic",
           not page.is_hidden("#panel")
           and "command topic" in page.inner_text("#setneed").lower(),
@@ -596,14 +655,14 @@ def upgrade_scenario(browser, check) -> None:
     check("and did not arm on the way", not posts, f"{len(posts)} posts")
     page.fill("#setcmd", "smoke-upgrade-cmd")
     page.click("#setform button[type=submit]")
-    page.wait_for_timeout(500)
+    until(page, "localStorage.getItem('magoun.cmd') === 'smoke-upgrade-cmd'", 3000)
     check("and remembers it",
           page.evaluate("localStorage.getItem('magoun.cmd')") == "smoke-upgrade-cmd",
           str(page.evaluate("localStorage.getItem('magoun.cmd')")))
     page.click("#setclose")
     posts.clear()
     page.click("#bell")                      # now it arms, and hands off
-    page.wait_for_timeout(3000)
+    until_py(page, lambda: any("smoke-upgrade-cmd" in u for u in posts), 4000)
     check("so the handoff then reaches the command topic",
           any("smoke-upgrade-cmd" in u for u in posts),
           f"{len(posts)} ntfy posts")
@@ -674,7 +733,7 @@ def figures_scenario(browser, check) -> None:
         page.on("pageerror", lambda e: errors.append(str(e)[:200]))
         page.route(re.compile(BACKEND_HOST), backend)
         page.goto(f"http://127.0.0.1:{port}/figures.html")
-        page.wait_for_timeout(2500)
+        until(page, "document.querySelectorAll('#marey-plot polyline').length > 0")
         print(f"\n  the figures page over HTTP on {port}")
         check("the figures page loads with no script error", not errors,
               "; ".join(errors[:2]))
@@ -686,7 +745,8 @@ def figures_scenario(browser, check) -> None:
         # doing anything, which is how the diagram went back to vertical spikes.
         shown = page.inner_text("#marey-day")
         page.get_by_role("button", name="all day").click()
-        page.wait_for_timeout(300)
+        until(page, f"document.querySelector('#marey-day').innerText !== {json.dumps(shown)}",
+              3000)
         check("the hours control changes what is drawn",
               page.inner_text("#marey-day") != shown,
               f"{shown} -> {page.inner_text('#marey-day')}")
@@ -702,7 +762,8 @@ def figures_scenario(browser, check) -> None:
         before = page.eval_on_selector("#marey-plot polyline",
                                        "e => e.getAttribute('points')")
         page.locator("#marey-filters").get_by_role("button", name="run time").click()
-        page.wait_for_timeout(300)
+        until(page, "document.querySelector('#marey-plot polyline')"
+                    f".getAttribute('points') !== {json.dumps(before)}", 3000)
         after = page.eval_on_selector("#marey-plot polyline",
                                       "e => e.getAttribute('points')")
         # The first station sits at zero on both axes, so the evidence has to be
@@ -717,7 +778,7 @@ def figures_scenario(browser, check) -> None:
               any("--ahead" in (c or "") for c in dev)
               and any("--behind" in (c or "") for c in dev), str(dev)[:90])
         page.get_by_role("button", name="show the numbers").click()
-        page.wait_for_timeout(200)
+        until(page, "document.querySelectorAll('#heat-table tr').length > 1", 3000)
         rows = page.eval_on_selector_all("#heat-table tr", "e => e.length")
         check("the numbers behind the colours are one click away", rows > 1,
               f"{rows} rows")
@@ -727,7 +788,7 @@ def figures_scenario(browser, check) -> None:
     page = browser.new_page()
     page.route(re.compile(BACKEND_HOST), backend)
     page.goto("file://" + str(ROOT / "web" / "figures.html"))
-    page.wait_for_timeout(2500)
+    until(page, "document.querySelectorAll('#marey-plot polyline').length > 0")
     runs = page.eval_on_selector_all("#marey-plot polyline", "e => e.length")
     check("from file:// it still draws, from the backend", runs > 0, f"{runs} polylines")
     page.close()
@@ -736,7 +797,7 @@ def figures_scenario(browser, check) -> None:
     page = browser.new_page()
     page.route(re.compile(BACKEND_HOST), lambda r: r.abort())
     page.goto("file://" + str(ROOT / "web" / "figures.html"))
-    page.wait_for_timeout(1500)
+    until(page, "document.querySelector('#marey-plot').innerText.includes('tailnet')")
     said = page.inner_text("#marey-plot")
     check("with no backend it names the failure instead of showing an empty frame",
           "tailnet" in said, said[:90].replace("\n", " "))
@@ -762,7 +823,7 @@ def served_scenario(browser, check) -> None:
         # The directory root, not the filename: the whole point of the rename is
         # that https://<pages>/mbta-glx/ serves the board.
         page.goto(f"http://127.0.0.1:{port}/")
-        page.wait_for_timeout(5000)
+        loaded(page)
 
         print(f"\n  serving web/ over HTTP on {port} (the deployed shape)")
         check("the board paints when served from the directory root",
@@ -843,7 +904,7 @@ def pwa_scenario(browser, check) -> None:
                 f.write_text(f.read_text().replace(pat.format(v), pat.format(nxt), 1))
             # What a resume does: visibilitychange runs checkVer.
             page.evaluate("Pwa.checkVer()")
-            page.wait_for_timeout(500)
+            until(page, "!document.querySelector('#ver').hidden", 3000)
             check("a deploy lights the update tag", page.is_visible("#ver"),
                   page.inner_text("#ver") if page.is_visible("#ver") else "hidden")
             with page.expect_navigation():
@@ -869,7 +930,7 @@ def pwa_scenario(browser, check) -> None:
             ctx.set_offline(True)
             page.clock.install()   # so the hourly model re-read can be reached below
             page.reload()
-            page.wait_for_timeout(1500)
+            until(page, "!!document.querySelector('#heroBig') && !!window.Magoun")
             check("offline, the board still opens from the cache",
                   page.evaluate("!!document.querySelector('#heroBig') && !!window.Magoun"),
                   page.title())
@@ -881,7 +942,7 @@ def pwa_scenario(browser, check) -> None:
             # Jump, firing each due timer once: run_for would fire the 250 ms repaint
             # 15,000 times, which took minutes in WebKit and missed the re-read.
             page.clock.fast_forward(3_700_000)
-            page.wait_for_timeout(2000)
+            until_py(page, lambda: len(asked) > n, 5000)
             check("back online, it re-reads the model within the hour", len(asked) > n)
             ctx.close()
 
@@ -941,8 +1002,9 @@ def run(case_index: int, headed: bool) -> int:
 
         errors = []
         page.on("pageerror", lambda e: errors.append(str(e)[:200]))
+        page.clock.install()       # for the re-arm window below
         page.goto(BOARD)
-        page.wait_for_timeout(6000)
+        loaded(page)
 
         print(f"replaying {fixture.name}#{case_index} as now, from file://\n")
         hero = page.inner_text("#heroBig").strip()
@@ -997,7 +1059,7 @@ def run(case_index: int, headed: bool) -> int:
         check("nothing is pushed until the rider arms something", not posts,
               f"{len(posts)} posts before the bell was tapped")
         page.click("#bell")
-        page.wait_for_timeout(2000)
+        until_py(page, lambda: any(q["at"] for q in posts), 3000)
         sched = [q for q in posts if q["at"]]
         check("tapping the bell schedules the fallback alert", len(sched) == 1,
               f"{len(sched)} scheduled posts")
@@ -1021,8 +1083,12 @@ def run(case_index: int, headed: bool) -> int:
             check("the alert is tagged for the app to collapse",
                   sched[0]["seq"] == "magoun-leave", str(sched[0]["seq"]))
 
-        print(f"\n  waiting {REARM_WAIT_S}s for the re-arm...")
-        page.wait_for_timeout(REARM_WAIT_S * 1000)
+        # On the fake clock, a poll at a time, so every tick in the window runs
+        # and paints rather than being skipped over.
+        waited = 0
+        while waited < REARM_WAIT_S:
+            next_poll(page)
+            waited += POLL_MS // 1000
         # Every publish is a delivery, so re-arming on a timer buys nothing and
         # costs a buzz. The page re-points the alert only when the leave time has
         # actually moved, and hands the train to the notifier, which refines one
@@ -1031,7 +1097,7 @@ def run(case_index: int, headed: bool) -> int:
         leave = [q for q in posts if q["at"]]
         cmds = [q for q in posts if "smoke-test-cmd" in (q["url"] or "")]
         check("an armed page never schedules a second alert",
-              len(leave) == 1, f"{len(leave)} scheduled posts in {REARM_WAIT_S + 8}s")
+              len(leave) == 1, f"{len(leave)} scheduled posts in {waited}s")
         check("but it keeps handing the train to the notifier",
               len(cmds) >= 2, f"{len(cmds)} command posts")
         if cmds:

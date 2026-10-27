@@ -380,7 +380,7 @@ prediction's lead, the source is a label and the veto is the half with teeth.)
   one, and the self-score to a hidden panel.
 
 `tests/board_smoke.py` drives the real page (playwright, MBTA and ntfy stubbed,
-~90 s, not collected by pytest) and checks 18 properties of it, including the
+not collected by pytest) and checks 18 properties of it, including the
 re-arm — measured at 60 s apart, which is the only reason to leave a tablet open.
 
 **Done when:** the board runs from `file://` with the Mac server stopped, an iPad

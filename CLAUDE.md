@@ -101,7 +101,7 @@ the things they catch are invisible to reading. Run them when you touch what the
 cover — a green suite is not evidence about either.
 
 ```bash
-# the board in a real browser: file:// and over HTTP, ~90 s
+# the board in a real browser: file:// and over HTTP
 PLAYWRIGHT_BROWSERS_PATH=~/.cache/ms-playwright \
   uv run --with playwright python tests/board_smoke.py
 # the notifier against the live feed and a real ntfy round trip, ~25 min.
