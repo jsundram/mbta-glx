@@ -1,4 +1,4 @@
-// pwa-starter: sw.js @ af148d7
+// pwa-starter: sw.js @ 93e7e5b
 // Service worker: offline shell + cache-busting.
 //
 // mbta-glx: V is bumped by src/pwa_version.py, not by hand. fit.py and publish.py run it
@@ -36,8 +36,8 @@
 // Get one wrong and the failure is a blank white screen offline, a lost offline copy, or a stale
 // one that never updates. The seven review rounds behind this design: #7.
 
-const V = "magoun-v4";   // <-- bumped by src/pwa_version.py on every shell change
-// SHELL FINGERPRINT: b36dff64e90e1618
+const V = "magoun-v5";   // <-- bumped by src/pwa_version.py on every shell change
+// SHELL FINGERPRINT: ac9861ef20a6d7ef
 
 // "magoun-v" — the stem shared by every cache generation. pwa.js's VER_PREFIX must match it, and the
 // NUMERIC TAIL is load-bearing: it is what makes the collect below DIRECTIONAL (delete strictly

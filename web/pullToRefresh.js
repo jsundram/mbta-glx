@@ -1,4 +1,4 @@
-// pwa-starter: pullToRefresh.js @ af148d7
+// pwa-starter: pullToRefresh.js @ 93e7e5b
 // Pull-to-refresh for installed (standalone) PWAs. OPTIONAL — delete this file
 // and its <script> + CSS if your app doesn't need it.
 //
