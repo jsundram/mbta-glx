@@ -331,11 +331,47 @@ function relevant(alerts, model) {
     .sort((a, b) => (b.severity || 0) - (a.severity || 0));
 }
 
+/** M/D of the service day `t` falls in. MBTA periods run 03:00 to 03:00, so a
+ *  suspension ending 11/2 03:00 is a suspension through 11/1. */
+const serviceDay = t => new Date((t - 3 * 3600) * 1000).toLocaleDateString(
+  "en-US", {timeZone: "America/New_York", month: "numeric", day: "numeric"});
+
+/** The one alert worth a banner, as {id, title, text}, or null.
+ *  One, not all: two suspensions a week apart rendered as two near-identical red
+ *  boxes, and the later one is the next banner once the first has ended. The
+ *  dates go in the title because they are the part a rider needs at a glance;
+ *  "upcoming" without them says nothing. */
+function banner(alerts, now) {
+  const shown = ["SUSPENSION", "STATION_CLOSURE", "NO_SERVICE", "SHUTTLE", "DETOUR"];
+  const live = (alerts || []).filter(a => shown.includes(a.effect)).map(a => {
+    // The period it is in now, or enters next. One with no periods is in force.
+    const ps = (a.periods || []).map(([s, e]) => [iso(s), iso(e)]);
+    const p = ps.length ? ps.find(([, e]) => e == null || e > now) : [null, null];
+    return p && {a: a, start: p[0], end: p[1]};
+  }).filter(Boolean);
+  if (!live.length) return null;
+  live.sort((x, y) => (x.start ?? -Infinity) - (y.start ?? -Infinity)
+                      || (y.a.severity || 0) - (x.a.severity || 0));
+  const {a, start, end} = live[0];
+  const name = a.effect.charAt(0) + a.effect.slice(1).toLowerCase().replace(/_/g, " ");
+  let when = "";
+  if (start != null && end != null) {
+    const d0 = serviceDay(start), d1 = serviceDay(end - 1);
+    when = d0 === d1 ? ` ${d0}` : ` ${d0}\u2013${d1}`;
+  } else if (end != null) {
+    when = ` through ${serviceDay(end - 1)}`;
+  } else if (start != null) {
+    when = start > now ? ` from ${serviceDay(start)}` : ` since ${serviceDay(start)}`;
+  }
+  return {id: a.id, title: name + when, text: a.header || a.short || ""};
+}
+
 exports.Model = Model;
 exports.computeRows = computeRows;
 exports.upstreamState = upstreamState;
 exports.lineMap = lineMap;
 exports.relevant = relevant;
+exports.banner = banner;
 exports.BerthTracker = BerthTracker;
 exports.ArrivalTracker = ArrivalTracker;
 exports.iso = iso;
@@ -559,6 +595,7 @@ async function fetchAlerts() {
     short: a.attributes.service_effect,
     stops: [...new Set((a.attributes.informed_entity || [])
       .map(e => e.stop).filter(Boolean))].sort(),
+    periods: (a.attributes.active_period || []).map(p => [p.start, p.end]),
   }));
 }
 

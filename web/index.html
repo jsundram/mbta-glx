@@ -119,9 +119,13 @@
   }
   .alert{background:color-mix(in srgb,var(--bad) 9%,var(--card));
          border:1px solid var(--bad);border-left-width:4px;border-radius:8px;
-         padding:11px 14px;margin-bottom:12px;font-size:13.5px;line-height:1.45}
-  .alert b{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;
-           color:var(--bad);margin-bottom:3px}
+         padding:8px 14px;margin-bottom:12px;font-size:13.5px;line-height:1.45}
+  .alert summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;
+                 font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+                 color:var(--bad)}
+  .alert summary::-webkit-details-marker{display:none}
+  .alert summary::after{content:"\25B8"} .alert[open] summary::after{content:"\25BE"}
+  .alert[open] summary{margin-bottom:4px}
   .hist{background:var(--card);border:1px solid var(--line);border-radius:10px;
         margin-bottom:12px;overflow:hidden}
   .hist h2{font-size:11px;letter-spacing:.09em;text-transform:uppercase;
@@ -568,6 +572,18 @@ const placeOf = r => (r.vehicle && whereIs(r.vehicle))
 const spread = r => (r.hi - r.lo) < 60 ? ""
   : `earliest ${hm(r.lo)}, latest ${hm(r.hi)}`;
 
+/** The service alert, collapsed to its title until tapped. Re-rendered every tick,
+ *  so an open one is kept open rather than snapping shut under the rider's finger. */
+function showBanner(b) {
+  const box = $("#alerts"), key = b ? [b.id, b.title, b.text].join("|") : "";
+  if (box.dataset.key === key) return;
+  const was = box.querySelector("details");
+  const open = b && was && was.dataset.id === b.id && was.open;
+  box.dataset.key = key;
+  box.innerHTML = b ? `<details class="alert" data-id="${b.id}"${open ? " open" : ""}>`
+    + `<summary>${b.title}</summary>${b.text}</details>` : "";
+}
+
 /** One alert at a time, shown on whichever train it was set for.
  *
  *  ntfy gives an anonymous topic no way to withdraw a scheduled publish, so a
@@ -662,12 +678,7 @@ function paint() {
     $("#heroSub").textContent = "nothing predicted";
     $("#heroWho").innerHTML = "";
   }
-  const al = (data.alerts || []).filter(a =>
-    ["SUSPENSION","STATION_CLOSURE","NO_SERVICE","SHUTTLE","DETOUR"].includes(a.effect));
-  $("#alerts").innerHTML = al.map(a =>
-    `<div class="alert"><b>${a.effect.replace("_"," ")}${
-      a.lifecycle === "UPCOMING" ? " · upcoming" : ""}</b>${
-      a.header || a.short || ""}</div>`).join("");
+  showBanner(Magoun.banner(data.alerts, now));
   // The armed train has come and gone: the rider is on it, or it is moot either
   // way. Disarm, and say so, or the notifier keeps working on a finished trip.
   if (armed) {

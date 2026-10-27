@@ -14,13 +14,8 @@ it is fetched, and so is the home-screen icon; that half is the only run that ta
 either branch. The self-score panel is neither: it asks the backend how trains have
 run today, and today is a question no published file can answer.
 
-Not collected by pytest on purpose: it needs playwright, a browser and ~90 s.
-
-    PLAYWRIGHT_BROWSERS_PATH=~/.cache/ms-playwright \\
-      uv run --with playwright==1.61.0 python tests/board_smoke.py [--headed] [--case N]
-
-The pin matters: playwright only drives the browser build it shipped with, and
-1.61.0 is the one matching the cached chromium-1228 / webkit-2311 on this Mac.
+Not collected by pytest on purpose: it needs playwright, a browser and ~90 s. How
+to run it is in CLAUDE.md, "Checks the suite cannot do".
 """
 import argparse
 import contextlib

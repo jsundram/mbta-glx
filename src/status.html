@@ -100,9 +100,13 @@
   }
   .alert{background:color-mix(in srgb,var(--bad) 9%,var(--card));
          border:1px solid var(--bad);border-left-width:4px;border-radius:8px;
-         padding:11px 14px;margin-bottom:12px;font-size:13.5px;line-height:1.45}
-  .alert b{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;
-           color:var(--bad);margin-bottom:3px}
+         padding:8px 14px;margin-bottom:12px;font-size:13.5px;line-height:1.45}
+  .alert summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;
+                 font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+                 color:var(--bad)}
+  .alert summary::-webkit-details-marker{display:none}
+  .alert summary::after{content:"\25B8"} .alert[open] summary::after{content:"\25BE"}
+  .alert[open] summary{margin-bottom:4px}
   .hist{background:var(--card);border:1px solid var(--line);border-radius:10px;
         margin-bottom:12px;overflow:hidden}
   .hist h2{font-size:11px;letter-spacing:.09em;text-transform:uppercase;
@@ -156,6 +160,45 @@
 <script>
 const $ = s => document.querySelector(s);
 let data = null, lastOk = 0, version = null, dueLatch = null;
+
+// ---- the service alert ----
+// A copy of web/app.js's banner(): this page does not load app.js. The backend's
+// alerts carry `periods` as [start, end] ISO pairs, the same shape.
+const serviceDay = t => new Date((t - 3 * 3600) * 1000).toLocaleDateString(
+  "en-US", {timeZone: "America/New_York", month: "numeric", day: "numeric"});
+const isoS = v => (v ? Date.parse(v) / 1000 : null);
+function banner(alerts, now) {
+  const shown = ["SUSPENSION", "STATION_CLOSURE", "NO_SERVICE", "SHUTTLE", "DETOUR"];
+  const live = (alerts || []).filter(a => shown.includes(a.effect)).map(a => {
+    const ps = (a.periods || []).map(([s, e]) => [isoS(s), isoS(e)]);
+    const p = ps.length ? ps.find(([, e]) => e == null || e > now) : [null, null];
+    return p && {a: a, start: p[0], end: p[1]};
+  }).filter(Boolean);
+  if (!live.length) return null;
+  live.sort((x, y) => (x.start ?? -Infinity) - (y.start ?? -Infinity)
+                      || (y.a.severity || 0) - (x.a.severity || 0));
+  const {a, start, end} = live[0];
+  const name = a.effect.charAt(0) + a.effect.slice(1).toLowerCase().replace(/_/g, " ");
+  let when = "";
+  if (start != null && end != null) {
+    const d0 = serviceDay(start), d1 = serviceDay(end - 1);
+    when = d0 === d1 ? ` ${d0}` : ` ${d0}\u2013${d1}`;
+  } else if (end != null) {
+    when = ` through ${serviceDay(end - 1)}`;
+  } else if (start != null) {
+    when = start > now ? ` from ${serviceDay(start)}` : ` since ${serviceDay(start)}`;
+  }
+  return {id: a.id, title: name + when, text: a.header || a.short || ""};
+}
+function showBanner(b) {
+  const box = $("#alerts"), key = b ? [b.id, b.title, b.text].join("|") : "";
+  if (box.dataset.key === key) return;
+  const was = box.querySelector("details");
+  const open = b && was && was.dataset.id === b.id && was.open;
+  box.dataset.key = key;
+  box.innerHTML = b ? `<details class="alert" data-id="${b.id}"${open ? " open" : ""}>`
+    + `<summary>${b.title}</summary>${b.text}</details>` : "";
+}
 
 // ---- push, with no backend involved ----
 // ntfy accepts cross-origin POSTs and will hold a message until a future time
@@ -284,12 +327,7 @@ function paint() {
     $("#heroBig").textContent = "—";
     $("#heroSub").textContent = "nothing predicted";
   }
-  const al = (data.alerts || []).filter(a =>
-    ["SUSPENSION","STATION_CLOSURE","NO_SERVICE","SHUTTLE","DETOUR"].includes(a.effect));
-  $("#alerts").innerHTML = al.map(a =>
-    `<div class="alert"><b>${a.effect.replace("_"," ")}${
-      a.lifecycle === "UPCOMING" ? " · upcoming" : ""}</b>${
-      (a.header || a.short || "").slice(0, 190)}</div>`).join("");
+  showBanner(banner(data.alerts, now));
   // Once the armed train has gone, disarm. There is no re-pointing to do: a
   // scheduled ntfy message cannot be moved, only added to.
   if (armed) {

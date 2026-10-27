@@ -101,7 +101,7 @@ cover — a green suite is not evidence about either.
 ```bash
 # the board in a real browser: file:// and over HTTP, ~90 s
 PLAYWRIGHT_BROWSERS_PATH=~/.cache/ms-playwright \
-  uv run --with playwright==1.61.0 python tests/board_smoke.py
+  uv run --with playwright python tests/board_smoke.py
 # the notifier against the live feed and a real ntfy round trip, ~25 min.
 # gtfs-realtime-bindings or the skip path is invisible and the run says so as
 # "no skips" -- see the launcher test in tests/test_server.py.
