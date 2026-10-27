@@ -36,8 +36,8 @@
 // Get one wrong and the failure is a blank white screen offline, a lost offline copy, or a stale
 // one that never updates. The seven review rounds behind this design: #7.
 
-const V = "magoun-v2";   // <-- bumped by src/pwa_version.py on every shell change
-// SHELL FINGERPRINT: f53f68acb678bbfd
+const V = "magoun-v3";   // <-- bumped by src/pwa_version.py on every shell change
+// SHELL FINGERPRINT: f45e83b027ebe2ac
 
 // "magoun-v" — the stem shared by every cache generation. pwa.js's VER_PREFIX must match it, and the
 // NUMERIC TAIL is load-bearing: it is what makes the collect below DIRECTIONAL (delete strictly

@@ -15,7 +15,9 @@ must equal, and `--check` fails on any one of them.
 
 This moves files. It never derives them: a missing `data/model.json` is an error
 telling you to run `fit.py`, not an invitation to fit. Fitting, scoring and
-simulating stay out of the publish path entirely.
+simulating stay out of the publish path entirely. The one thing it writes is a
+version number: when a move changed a file the service worker precaches, it bumps
+`web/sw.js`'s V (`pwa_version.sync`), or installed copies would keep the old file.
 
 Usage:
   python src/publish.py --check        # verify the origin, write nothing
@@ -96,6 +98,7 @@ MANIFEST = [
              why="the same bytes as a script, for file://"),
     Artifact("icon-180.png", why="the home-screen icon, for iOS"),
     Artifact("figures.html", why="the archive, drawn"),
+    Artifact("proof.html", why="that the origin needs no backend"),
     Artifact("sw.js", why="the service worker; its V moves with the shell"),
     Artifact("pwa.js", why="registers it, and the tap-to-update tag"),
     Artifact("pullToRefresh.js", why="a reload gesture for the installed app"),

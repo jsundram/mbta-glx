@@ -180,7 +180,7 @@ def test_the_new_icons_are_the_ones_make_icon_draws():
     """Same guard as icon-180's in test_publish, on the decoded pixels."""
     import zlib
     import make_icon
-    for size in make_icon.SIZES:
+    for size in set(make_icon.SIZES) - {make_icon.SIZE}:   # 180 is test_publish's
         raw = (WEB / f"icon-{size}.png").read_bytes()
         idat, i = b"", 8
         while i < len(raw):

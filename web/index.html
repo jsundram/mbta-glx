@@ -52,9 +52,8 @@
   @media (prefers-color-scheme:dark){:root{--bg:#11150f;--card:#181d19;--ink:#e8efe8;
         --dim:#8d9a90;--line:#28302a;--go:#3fb46f;--warn:#d69a46;--bad:#e07070}}
   *{box-sizing:border-box}
-  /* safe-area padding: real gaps on a notched phone, 0 everywhere else. No
-     rubber-band either, so a pull from the top is pullToRefresh.js's to answer. */
-  body{margin:0;background:var(--bg);color:var(--ink);overscroll-behavior-y:none;
+  /* safe-area padding: real gaps on a notched phone, 0 everywhere else. */
+  body{margin:0;background:var(--bg);color:var(--ink);
        padding:calc(20px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right))
                calc(40px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
        font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
@@ -237,6 +236,9 @@
   .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
        background:var(--go);margin-right:6px;vertical-align:1px}
   .dot.off{background:var(--bad)}
+  /* No rubber-band in the installed app, where pullToRefresh.js answers a pull.
+     Only there: in a browser tab this would switch off the browser's own. */
+  @media (display-mode:standalone){body{overscroll-behavior-y:none}}
   /* pwa.js shows this when the server has a newer version than the code running here. */
   .ver{display:block;width:100%;min-height:44px;margin:0 0 12px;padding:10px 14px;
        font:inherit;font-size:13.5px;text-align:left;cursor:pointer;border-radius:8px;

@@ -41,7 +41,9 @@ window.PullToRefresh = class {
     // passive:false so _onMove can preventDefault during an active pull only.
     document.addEventListener("touchmove", e => this._onMove(e), { passive: false });
     document.addEventListener("touchend", () => this._onEnd(), { passive: true });
-    document.addEventListener("touchcancel", () => this._reset(), { passive: true });
+    // mbta-glx: not mid-refresh -- resetting then clears `refreshing` while onRefresh is still
+    // running, and the next pull starts a second refresh on top of the first.
+    document.addEventListener("touchcancel", () => { if (!this.refreshing) this._reset(); }, { passive: true });
   }
 
   _createIndicator() {
@@ -54,9 +56,16 @@ window.PullToRefresh = class {
 
   _scrollTop() { return window.scrollY || document.documentElement.scrollTop || 0; }
 
+  // mbta-glx: the page can be at the top while a box inside it is scrolled (the board's train
+  // list scrolls on its own). A downward drag there is the list scrolling back up, not a pull.
+  _inScrolledBox(el) {
+    for (; el && el !== document.body; el = el.parentElement) if (el.scrollTop > 0) return true;
+    return false;
+  }
+
   _onStart(e) {
     if (this.refreshing) return;
-    if (this._scrollTop() > 0) { this.startY = null; return; }  // only from the top
+    if (this._scrollTop() > 0 || this._inScrolledBox(e.target)) { this.startY = null; return; }  // only from the top
     this.startY = e.touches[0].clientY;
     this.currentPull = 0;
   }

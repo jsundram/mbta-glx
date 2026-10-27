@@ -813,9 +813,16 @@ def pwa_scenario(browser, check) -> None:
             stub(page, live)
             base = f"http://127.0.0.1:{port}/"
             page.goto(base)
-            page.wait_for_function("navigator.serviceWorker.controller !== null",
-                                   timeout=15000)
-            check("the service worker takes control", True)
+            try:
+                page.wait_for_function("navigator.serviceWorker.controller !== null",
+                                       timeout=15000)
+                controlled = True
+            except Exception:  # noqa: BLE001 - a timeout is the finding, not a crash
+                controlled = False
+            check("the service worker takes control", controlled)
+            if not controlled:
+                ctx.close()
+                return
             cached = page.evaluate("""async (v) => {
                 const c = await caches.open(v);
                 return (await c.keys()).map(r => new URL(r.url).pathname);
@@ -853,13 +860,25 @@ def pwa_scenario(browser, check) -> None:
                     break
                 page.wait_for_timeout(250)
             check("the new shell is precached", page.evaluate(count, nxt) >= len(shell))
+            asked = []
+            ctx.on("request", lambda r: asked.append(1) if r.url.endswith("/model.json") else None)
             ctx.set_offline(True)
+            page.clock.install()   # so the hourly model re-read can be reached below
             page.reload()
             page.wait_for_timeout(1500)
             check("offline, the board still opens from the cache",
                   page.evaluate("!!document.querySelector('#heroBig') && !!window.Magoun"),
                   page.title())
+            # Opened offline, the model came from the cached model.js. Back online,
+            # the hourly re-read must still reach model.json, or a board opened
+            # without signal never takes a refit (it once stopped for good).
             ctx.set_offline(False)
+            n = len(asked)
+            # Jump, firing each due timer once: run_for would fire the 250 ms repaint
+            # 15,000 times, which took minutes in WebKit and missed the re-read.
+            page.clock.fast_forward(3_700_000)
+            page.wait_for_timeout(2000)
+            check("back online, it re-reads the model within the hour", len(asked) > n)
             ctx.close()
 
 

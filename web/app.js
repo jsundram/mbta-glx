@@ -688,7 +688,11 @@ function start(onData, onError) {
         el.onerror = () => no(e);
         document.head.appendChild(el);
       });
-      fromScript = true;
+      // Only file:// stops re-reading: there the script cannot see a newer file.
+      // Over http(s) this is an offline start served model.js from the service
+      // worker's cache, and the hourly check has to keep trying model.json, or a
+      // board opened without signal never takes a refit.
+      fromScript = location.protocol === "file:";
       const t = (globalThis.Magoun || {})._modelText;
       if (!t) throw e;
       return t;

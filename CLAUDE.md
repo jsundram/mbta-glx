@@ -160,8 +160,9 @@ reach the backend. It draws its own marks in SVG, because a charting library fro
 CDN is a host `test_regressions.ALLOWED_HOSTS` would have to admit.
 
 `web/` **is** the static origin — Pages uploads it as-is. `publish.py` moves files
-and never derives them; `fit.py` and `stats.py` are what write `data/`. `stats.json`
-is **not** published any more: the board's self-score panel asks `/today`, and a file
+and never derives them (the one thing it writes is `sw.js`'s version, below);
+`fit.py` and `stats.py` are what write `data/`. `stats.json` is **not** published
+any more: the board's self-score panel asks `/today`, and a file
 in `web/` that nothing fetches goes stale there with every test still green.
 `data/stats.json` remains the project's own record.
 
