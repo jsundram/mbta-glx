@@ -17,7 +17,7 @@
  */
 (function () {
   const VER_PREFIX = "magoun-v";   // sw.js's V stem
-  const APP_V = "magoun-v3";       // = sw.js's V; src/pwa_version.py moves both together
+  const APP_V = "magoun-v4";       // = sw.js's V; src/pwa_version.py moves both together
 
   /** Show the tag when the server is ahead of the code running here. Returns
    *  whether it is, so pull-to-refresh can apply the update instead of polling. */
@@ -62,6 +62,9 @@
   /** `refresh` is the board's own re-poll; pull-to-refresh runs it, or applies a
    *  waiting update instead, since that is what a rider pulling down wants. */
   function boot({refresh}) {
+    // Plain text, not a control: the update tag and pull-to-refresh already act on it.
+    const build = document.getElementById("build");
+    if (build) build.textContent = APP_V;
     // http(s) only: from file:// register() rejects, which is harmless but noisy.
     if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
       navigator.serviceWorker.register("./sw.js").catch(() => {});

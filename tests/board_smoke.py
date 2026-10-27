@@ -833,6 +833,8 @@ def pwa_scenario(browser, check) -> None:
             check("model.json is not cached: a refit has to reach a running board",
                   "/model.json" not in cached)
             check("no update tag while current", page.is_hidden("#ver"))
+            check("the footer names the running version", page.inner_text("#build") == v,
+                  page.inner_text("#build"))
 
             # A deploy: the server's sw.js and pwa.js move to the next version.
             nxt = re.sub(r"\d+$", lambda m: str(int(m.group()) + 1), v)
@@ -849,6 +851,8 @@ def pwa_scenario(browser, check) -> None:
             page.wait_for_function("window.Pwa !== undefined")
             running = page.evaluate("Pwa.APP_V")
             check("tapping it lands the new code", running == nxt, f"{running} vs {nxt}")
+            check("and the footer says so", page.inner_text("#build") == nxt,
+                  page.inner_text("#build"))
             page.evaluate("Pwa.checkVer()")
             page.wait_for_timeout(500)
             check("and the tag goes away", page.is_hidden("#ver"))

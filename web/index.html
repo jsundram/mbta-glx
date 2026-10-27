@@ -215,6 +215,8 @@
            text-decoration:underline;text-decoration-style:dotted}
   .setlink:hover{color:var(--go)}
   .setlink:focus-visible{outline:2px solid var(--go);outline-offset:2px}
+  /* Which version is running, so a screenshot says what it is a screenshot of. */
+  .build{display:inline-block;margin-top:10px;font:12px var(--mono);color:var(--dim)}
   .panel{background:var(--card);border:1px solid var(--line);border-radius:10px;
          padding:14px 16px 16px;margin-top:10px;font-size:13px;line-height:1.5}
   .panel h2{font-size:11px;letter-spacing:.09em;text-transform:uppercase;
@@ -296,6 +298,7 @@
   <a class="setlink" href="figures.html">how the line ran</a>
   <button class="setlink" id="setlink" aria-expanded="false"
           aria-controls="panel">settings</button>
+  <span class="build" id="build"></span>
   <!-- Four things, all of them this device's rather than this board's: the walk the
        alert is aimed off, where that alert goes, and a key for when MBTA is
        rate-limiting this address. The topic is one person's phone and the key is one
