@@ -1,7 +1,28 @@
 <!doctype html>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- viewport-fit=cover pairs with the safe-area padding on body, so an installed copy
+     keeps clear of the notch and the home indicator. -->
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
 <title>Magoun Inbound</title>
+<meta name="description" content="When the next inbound Green Line train reaches Magoun Square, and when to leave for it.">
+<!-- The share card. og:image and og:url have to be ABSOLUTE, and the image a raster:
+     iMessage, WhatsApp and Slack reject a relative path or an SVG, and skip a card
+     over ~300 KB. web/og.png is drawn from src/og.svg by src/make_og.sh. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Magoun">
+<meta property="og:title" content="Magoun Square → downtown">
+<meta property="og:description" content="The next inbound Green Line trains at Magoun Square, and when to leave so you catch one.">
+<meta property="og:url" content="https://jsundram.github.io/mbta-glx/">
+<meta property="og:image" content="https://jsundram.github.io/mbta-glx/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="A green E badge and the words Magoun Square → downtown.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Magoun Square → downtown">
+<meta name="twitter:description" content="The next inbound Green Line trains at Magoun Square, and when to leave so you catch one.">
+<meta name="twitter:image" content="https://jsundram.github.io/mbta-glx/og.png">
+<link rel="canonical" href="https://jsundram.github.io/mbta-glx/">
 <!-- The tab icon, inline: a board opened as file:// cannot fetch a sibling file, so
      a linked .ico or .svg would simply not load there. Same drawing as
      web/icon-180.png, on the same 180-unit grid -- src/make_icon.py writes that one,
@@ -9,7 +30,13 @@
      PNG exists. The `#` in a colour has to be %23 or it starts a URL fragment. -->
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'><rect width='180' height='180' rx='38' fill='%2300843D'/><g fill='%23ffffff'><rect x='56' y='44' width='68' height='20'/><rect x='56' y='80' width='58' height='20'/><rect x='56' y='116' width='68' height='20'/><rect x='56' y='44' width='20' height='92'/></g></svg>">
 <link rel="apple-touch-icon" href="icon-180.png">
+<!-- Install polish. iOS reads these and the apple-touch-icon and mostly ignores the
+     manifest; Android reads the manifest. Both, or one platform's install looks broken. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Magoun">
+<link rel="manifest" href="manifest.json">
 <!-- The browser chrome, matched to the page rather than to the route colour: the
      board is not green, and a green bar above a pale board reads as a rendering bug. -->
 <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f8f5">
@@ -25,7 +52,11 @@
   @media (prefers-color-scheme:dark){:root{--bg:#11150f;--card:#181d19;--ink:#e8efe8;
         --dim:#8d9a90;--line:#28302a;--go:#3fb46f;--warn:#d69a46;--bad:#e07070}}
   *{box-sizing:border-box}
-  body{margin:0;padding:20px 16px 40px;background:var(--bg);color:var(--ink);
+  /* safe-area padding: real gaps on a notched phone, 0 everywhere else. No
+     rubber-band either, so a pull from the top is pullToRefresh.js's to answer. */
+  body{margin:0;background:var(--bg);color:var(--ink);overscroll-behavior-y:none;
+       padding:calc(20px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right))
+               calc(40px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
        font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
        -webkit-font-smoothing:antialiased}
   .wrap{max-width:520px;margin:0 auto}
@@ -206,12 +237,30 @@
   .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
        background:var(--go);margin-right:6px;vertical-align:1px}
   .dot.off{background:var(--bad)}
+  /* pwa.js shows this when the server has a newer version than the code running here. */
+  .ver{display:block;width:100%;min-height:44px;margin:0 0 12px;padding:10px 14px;
+       font:inherit;font-size:13.5px;text-align:left;cursor:pointer;border-radius:8px;
+       border:1px solid var(--go);background:var(--card);color:var(--go)}
+  .ver[hidden]{display:none}
+  /* pullToRefresh.js drives --ptr-y (offset) and --ptr-opacity as you pull. */
+  #ptr-indicator{position:fixed;top:env(safe-area-inset-top);left:50%;z-index:50;
+                 pointer-events:none;transform:translate(-50%,calc(var(--ptr-y,0px) - 40px));
+                 opacity:var(--ptr-opacity,0);transition:opacity .15s ease}
+  #ptr-indicator:not(.pulling){transition:transform .25s ease,opacity .15s ease}
+  .ptr-spinner{width:24px;height:24px;border-radius:50%;
+               border:2px solid var(--line);border-top-color:var(--go)}
+  #ptr-indicator.refreshing .ptr-spinner{animation:ptr-spin .7s linear infinite}
+  @keyframes ptr-spin{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion:reduce){
+    #ptr-indicator.refreshing .ptr-spinner{animation:none}
+  }
 </style>
 <div class="wrap">
   <header>
     <h1>Magoun Square &rarr; downtown</h1>
     <span class="clock" id="clock">--:--</span>
   </header>
+  <button type="button" id="ver" class="ver" hidden>New version ready &mdash; tap to update</button>
   <div id="alerts"></div>
   <div id="hero" class="hero">
     <div class="label" id="heroLabel">Next train</div>
@@ -303,6 +352,8 @@
   </div>
 </div>
 <script src="app.js"></script>
+<script src="pullToRefresh.js"></script>
+<script src="pwa.js"></script>
 <script>
 const $ = s => document.querySelector(s);
 let data = null, lastOk = 0, version = null, dueLatch = null, panelAsked = false;
@@ -969,7 +1020,8 @@ function onData(d) {
   if (!panelAsked) { panelAsked = true; todayPanel(); }
 }
 
-function poll() { if (feed) feed.refresh(); }   // visibilitychange wants this
+// visibilitychange wants this, and pull-to-refresh waits on the promise.
+function poll() { return feed ? feed.refresh() : Promise.resolve(); }
 
 // Wired once. Saving retries immediately rather than serving out the backoff --
 // the rider has just fixed the thing the backoff was for.
@@ -985,6 +1037,8 @@ $("#keyform").onsubmit = (e) => {
 
 keepAwake();
 feed = Magoun.start(onData, () => paint());
+// The service worker and the update tag. Optional: the board runs without pwa.js.
+if (window.Pwa) Pwa.boot({refresh: poll});
 setInterval(paint, 250);
 // Once a minute, which matches the floor the backend recomputes on. The first
 // call comes from onData instead, as soon as there is a model to read the base from.

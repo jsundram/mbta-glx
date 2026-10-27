@@ -32,7 +32,9 @@ repo, so everything that reads it runs on this host; CI only runs the suite.
 ```bash
 ./src/daily.sh                                   # rollup, score, figures, suite, publish
 uv run --with polars --with numpy python src/stats.py    # score closed days -> data/stats.json
-uv run python src/make_icon.py                   # redraw web/icon-180.png
+uv run python src/make_icon.py                   # redraw web/icon-{180,192,512}.png
+./src/make_og.sh                                 # redraw web/og.png, the share card
+uv run python src/pwa_version.py                 # bump sw.js's V after a hand edit to web/
 uv run --with polars python src/figures.py       # Marey + heatmap -> data/figures.json
 uv run python src/publish.py --check             # is web/ complete and current?
 uv run python src/publish.py --commit            # commit what moved; never pushes
@@ -109,7 +111,9 @@ uv run --with numpy --with gtfs-realtime-bindings python tests/live_notifier.py
 ```
 
 - **`board_smoke.py`** after any change to `web/` — a `file://` board cannot fetch
-  a sibling file at all, which no unit test can see.
+  a sibling file at all, which no unit test can see. It also runs the installed-app
+  path (service worker, update tag, offline open) in WebKit, the iPhone's engine,
+  so it needs `playwright install webkit` as well as chromium.
 - **`live_notifier.py`** after any change to `watch.py`, `notify.py`, `brief.py` or
   the board's handoff, and before claiming M5 works. It arms a train past MBTA's
   horizon, drops the page, and reports which triggers actually fired. It mints
@@ -160,6 +164,15 @@ and never derives them; `fit.py` and `stats.py` are what write `data/`. `stats.j
 is **not** published any more: the board's self-score panel asks `/today`, and a file
 in `web/` that nothing fetches goes stale there with every test still green.
 `data/stats.json` remains the project's own record.
+
+**The board is an installable app**, built on
+[pwa-starter](https://github.com/jsundram/pwa-starter): `web/sw.js` (a stamped copy)
+serves the shell from its own cache, so a phone sees a deploy only under a new `V`.
+`src/pwa_version.py` bumps it; `fit.py` and `publish.py` call it, and
+`tests/test_pwa.py` fails when the shell moved without one, so after a hand edit to
+anything in `web/`, run it. `model.json` bypasses the worker on purpose: app.js's
+hourly refit check must see the network's copy. An installed board that looks old
+shows "New version ready — tap to update"; pulling down applies it.
 
 ## Invariants — breaking these fails silently
 

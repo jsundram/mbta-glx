@@ -1,4 +1,4 @@
-"""Draw web/icon-180.png -- the home-screen icon -- from code, not from a design tool.
+"""Draw the home-screen icons -- web/icon-{180,192,512}.png -- from code, not a design tool.
 
 The tab favicon is an inline SVG data URI in index.html, because a board opened as
 file:// cannot fetch a sibling file and a sixth published asset for sixteen pixels is
@@ -8,6 +8,11 @@ screenshot of the page, which at icon size is a grey smear.
 
 Full-bleed and opaque on purpose. iOS masks the icon to its own squircle, so artwork
 that rounds its own corners ends up as a rounded square inside a rounded square.
+
+192 and 512 are for web/manifest.json (Android reads the manifest; iOS reads the
+180). The 512 doubles as the `maskable` icon, which Android crops to a circle of
+radius 40% of the width: the E's farthest corner sits 32% from the centre, so it
+survives every mask shape, and the green runs to the edge so there is nothing to crop.
 
 Generated rather than committed blind: a binary asset nobody can regenerate is a
 binary asset nobody can change. `tests/test_publish.py` decodes the committed file
@@ -22,8 +27,8 @@ import struct
 import zlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-OUT = ROOT / "web" / "icon-180.png"
-SIZE = 180
+SIZE = 180                       # the grid BARS is drawn on, and the iOS icon's size
+SIZES = (180, 192, 512)
 GREEN = (0x00, 0x84, 0x3D)       # the MBTA's green, same as --go in the light theme
 WHITE = (0xFF, 0xFF, 0xFF)
 
@@ -38,13 +43,23 @@ BARS = [
 ]
 
 
-def pixels() -> bytes:
-    """The image as raw 8-bit RGB scanlines, no filter bytes."""
+def out(size: int) -> pathlib.Path:
+    return ROOT / "web" / f"icon-{size}.png"
+
+
+def pixels(size: int = SIZE) -> bytes:
+    """The image as raw 8-bit RGB scanlines, no filter bytes.
+
+    Each pixel is sampled at its centre on the 180-unit grid, which at 180 is
+    exactly the integer test it always was, so icon-180.png did not move.
+    """
     rows = []
-    for y in range(SIZE):
+    for y in range(size):
+        v = (y + 0.5) * SIZE / size
         row = bytearray()
-        for x in range(SIZE):
-            ink = any(x0 <= x < x1 and y0 <= y < y1 for x0, y0, x1, y1 in BARS)
+        for x in range(size):
+            u = (x + 0.5) * SIZE / size
+            ink = any(x0 <= u < x1 and y0 <= v < y1 for x0, y0, x1, y1 in BARS)
             row += bytes(WHITE if ink else GREEN)
         rows.append(bytes(row))
     return b"".join(rows)
@@ -55,10 +70,10 @@ def _chunk(kind: bytes, data: bytes) -> bytes:
             + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
 
 
-def png(raw: bytes) -> bytes:
+def png(raw: bytes, size: int = SIZE) -> bytes:
     """Minimal 8-bit truecolour PNG. No dependency worth taking for four rectangles."""
-    ihdr = struct.pack(">IIBBBBB", SIZE, SIZE, 8, 2, 0, 0, 0)
-    stride = SIZE * 3
+    ihdr = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)
+    stride = size * 3
     # Filter type 0 per scanline: this is flat colour, so nothing else pays for itself.
     scanlines = b"".join(b"\x00" + raw[i:i + stride]
                          for i in range(0, len(raw), stride))
@@ -67,8 +82,10 @@ def png(raw: bytes) -> bytes:
 
 
 def main() -> None:
-    OUT.write_bytes(png(pixels()))
-    print(f"wrote {OUT} ({OUT.stat().st_size} bytes, {SIZE}x{SIZE})")
+    for size in SIZES:
+        path = out(size)
+        path.write_bytes(png(pixels(size), size))
+        print(f"wrote {path} ({path.stat().st_size} bytes, {size}x{size})")
 
 
 if __name__ == "__main__":

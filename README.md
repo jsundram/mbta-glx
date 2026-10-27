@@ -316,7 +316,9 @@ the 90-day prune of the archive it was computed from.
 | `src/replay.py` | score the last N trains against the leave-now advice |
 | `src/stats.py` | score closed days into `data/scores.jsonl` → `data/stats.json` |
 | `src/server.py` | the four things a browser cannot fetch: `/skips`, `/capture`, `/today`, `/figures` |
-| `src/make_icon.py` | draw `web/icon-180.png`; iOS will not take an SVG for a home-screen icon |
+| `src/make_icon.py` | draw `web/icon-{180,192,512}.png`; iOS will not take an SVG for a home-screen icon |
+| `src/make_og.sh` | rasterize the share card `src/og.svg` to `web/og.png` (needs `rsvg-convert`, `pngquant`) |
+| `src/pwa_version.py` | bump `web/sw.js`'s `V` when a precached file moved, so installed copies refetch |
 | `src/publish.py` | move the published set to the static origin; refuse a partial one |
 | `src/refit.sh`, `src/refit.py` | a deliberate refit, and the diffs to read before accepting it |
 | `src/rating.py` | watch for the schedule rating change that resets every constant |

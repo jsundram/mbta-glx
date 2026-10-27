@@ -618,7 +618,7 @@ def upgrade_scenario(browser, check) -> None:
 
 
 @contextlib.contextmanager
-def _serve_web():
+def _serve_web(directory=None):
     """web/ over HTTP on a free port, which is the shape Pages deploys.
 
     Quiet has to be a subclass: setting .log_message on a functools.partial
@@ -628,7 +628,13 @@ def _serve_web():
         def log_message(self, *a, **k):
             pass
 
-    handler = functools.partial(Quiet, directory=str(ROOT / "web"))
+        # What Pages sends. Without it the browser invents a lifetime from
+        # Last-Modified, which is neither Pages' behaviour nor a bounded one.
+        def end_headers(self):
+            self.send_header("Cache-Control", "max-age=600")
+            super().end_headers()
+
+    handler = functools.partial(Quiet, directory=str(directory or ROOT / "web"))
     with socketserver.TCPServer(("127.0.0.1", 0), handler) as httpd:
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         try:
@@ -776,6 +782,85 @@ def served_scenario(browser, check) -> None:
         check("the home-screen icon is actually served", "image/png" in (icon or ""),
               str(icon))
         page.close()
+
+
+def pwa_scenario(browser, check) -> None:
+    """The installed-app path: the worker precaches the board, a deploy lights the
+    update tag, tapping it lands the new code, and the board opens offline.
+
+    Served from a COPY of web/, so a deploy can be faked by bumping the copy's V.
+    None of this happens from file:// (no service worker there), which is why the
+    rest of this file could not see it. The phone failure it guards: a deploy that
+    sits unseen on an installed board for days, with nothing to tap.
+    """
+    import shutil
+    import tempfile
+    sys.path.insert(0, str(ROOT / "src"))
+    import pwa_version
+
+    with tempfile.TemporaryDirectory() as tmp:
+        web = pathlib.Path(tmp) / "web"
+        shutil.copytree(ROOT / "web", web)
+        v = pwa_version.version(web)
+        shell = pwa_version.shell_files(web)
+        with _serve_web(web) as port:
+            print(f"\n  the installed-app path, over HTTP on {port}")
+            fixture = sorted((ROOT / "tests" / "fixtures").glob("cases-*.json"))[0]
+            case = json.loads(fixture.read_text())[0]
+            live = shifted(case, time.time() - case["now"] + 30)
+            ctx = browser.new_context()
+            page = ctx.new_page()
+            stub(page, live)
+            base = f"http://127.0.0.1:{port}/"
+            page.goto(base)
+            page.wait_for_function("navigator.serviceWorker.controller !== null",
+                                   timeout=15000)
+            check("the service worker takes control", True)
+            cached = page.evaluate("""async (v) => {
+                const c = await caches.open(v);
+                return (await c.keys()).map(r => new URL(r.url).pathname);
+            }""", v)
+            want = {"/" + f for f in shell}
+            check("the whole shell is precached under V", want <= set(cached),
+                  f"missing {sorted(want - set(cached))}")
+            check("model.json is not cached: a refit has to reach a running board",
+                  "/model.json" not in cached)
+            check("no update tag while current", page.is_hidden("#ver"))
+
+            # A deploy: the server's sw.js and pwa.js move to the next version.
+            nxt = re.sub(r"\d+$", lambda m: str(int(m.group()) + 1), v)
+            for name, pat in (("sw.js", 'const V = "{}"'), ("pwa.js", 'const APP_V = "{}"')):
+                f = web / name
+                f.write_text(f.read_text().replace(pat.format(v), pat.format(nxt), 1))
+            # What a resume does: visibilitychange runs checkVer.
+            page.evaluate("Pwa.checkVer()")
+            page.wait_for_timeout(500)
+            check("a deploy lights the update tag", page.is_visible("#ver"),
+                  page.inner_text("#ver") if page.is_visible("#ver") else "hidden")
+            with page.expect_navigation():
+                page.click("#ver")
+            page.wait_for_function("window.Pwa !== undefined")
+            running = page.evaluate("Pwa.APP_V")
+            check("tapping it lands the new code", running == nxt, f"{running} vs {nxt}")
+            page.evaluate("Pwa.checkVer()")
+            page.wait_for_timeout(500)
+            check("and the tag goes away", page.is_hidden("#ver"))
+
+            # Offline: once the new shell is in, a reload must still open the board.
+            count = "async (v) => (await (await caches.open(v)).keys()).length"
+            for _ in range(60):
+                if page.evaluate(count, nxt) >= len(shell):
+                    break
+                page.wait_for_timeout(250)
+            check("the new shell is precached", page.evaluate(count, nxt) >= len(shell))
+            ctx.set_offline(True)
+            page.reload()
+            page.wait_for_timeout(1500)
+            check("offline, the board still opens from the cache",
+                  page.evaluate("!!document.querySelector('#heroBig') && !!window.Magoun"),
+                  page.title())
+            ctx.set_offline(False)
+            ctx.close()
 
 
 def _case_stopped_at_magoun():
@@ -954,7 +1039,22 @@ def run(case_index: int, headed: bool) -> int:
         ratelimit_scenario(browser, check)
         served_scenario(browser, check)
         figures_scenario(browser, check)
+        pwa_scenario(browser, check)
         browser.close()
+
+        # Again in WebKit, which is what an iPhone runs. The service worker's worst
+        # failures are WebKit-only (a blank screen where Chromium recovers), and the
+        # phone is where this board is installed. Missing WebKit is a failure, not a
+        # skip: `playwright install webkit` once, alongside chromium.
+        try:
+            webkit = p.webkit.launch(headless=not headed)
+        except Exception as e:  # noqa: BLE001
+            check("WebKit is installed for the installed-app path", False,
+                  str(e).splitlines()[0])
+        else:
+            print("\n  ...and in WebKit")
+            pwa_scenario(webkit, check)
+            webkit.close()
 
     print()
     if failures:

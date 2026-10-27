@@ -6,6 +6,7 @@ import pathlib
 import numpy as np
 import polars as pl
 
+import pwa_version
 import service
 from model import BASE, MAXD, TIERS
 
@@ -190,6 +191,10 @@ def main() -> None:
     OUT.write_text(json.dumps(model))
     WEB_OUT.write_text(OUT.read_text())
     WEB_JS.write_text(_as_script(OUT.read_text()))
+    # model.js is in the service worker's shell: without a new V, installed copies
+    # keep the old model offline. publish.py does the same; doing it here too keeps
+    # the suite in refit.sh green between the two.
+    pwa_version.sync(WEB_JS.parent)
     print(f"wrote {OUT} and {WEB_OUT} from {model['n_legs']} legs over {model['days']} days")
     print("  median headway", round(model["headway_median_s"] / 60, 1), "min")
     for t in TIERS:

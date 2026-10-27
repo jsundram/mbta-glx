@@ -21,7 +21,8 @@ shape of the system and the order of work.
 │    ├─ fetch  <backend_url>/skips      skips (no CORS path) │
 │    ├─ fetch  <backend_url>/capture    is the archiver alive? │
 │    ├─ fetch  <backend_url>/today      how trains ran today  │
-│    └─ POST   ntfy.sh                  arm its own alerts   │
+│    ├─ POST   ntfy.sh                  arm its own alerts   │
+│    └─ sw.js  precaches the shell; pwa.js: "tap to update"  │
 │  figures.html                                              │
 │    ├─ <script> model.js               for backend_url      │
 │    └─ fetch  <backend_url>/figures    the archive, drawn   │
@@ -404,10 +405,19 @@ manifest, each derived entry naming the file under `data/` it must equal:
 | `model.js` | `data/model.json`, script-wrapped | a `file://` board cannot fetch a sibling file at all |
 | `icon-180.png` | — | drawn by `src/make_icon.py`; iOS will not take an SVG |
 | `figures.html` | — | the second page: the Marey and the heatmap (its data is the backend's `/figures`) |
+| `sw.js` | its `V` moves with the shell | the service worker (from pwa-starter); `src/pwa_version.py` bumps `V` |
+| `pwa.js`, `pullToRefresh.js` | — | registers the worker and shows "tap to update"; a reload gesture for the installed app |
+| `manifest.json`, `icon-192.png`, `icon-512.png` | — | installability; the icons are `make_icon.py`'s |
+| `og.png` | — | the share card, drawn from `src/og.svg` by `src/make_og.sh` |
 
 **A refit publishes three artifacts, not one.** A publisher carrying only
 `data/model.json` leaves the board predicting from the previous rating with nothing
-on screen to say so. `tests/test_publish.py` fails if the manifest loses one, and
+on screen to say so. It also moves `sw.js`'s `V`, because `model.js` is precached:
+an installed copy only refetches its shell under a new `V`, so `fit.py` and
+`publish.py` both run `pwa_version.sync`, and `tests/test_pwa.py` fails on a shell
+that moved without one -- which is what catches a hand edit to `index.html`.
+`model.json` deliberately bypasses the worker: the board's hourly refit check has to
+see the network's copy, not its own. `tests/test_publish.py` fails if the manifest loses one, and
 separately if the board starts fetching an asset the manifest does not carry.
 
 Write-only by default; `--commit` makes a local commit, scoped to its own paths;

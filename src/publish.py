@@ -31,6 +31,8 @@ import shutil
 import subprocess
 import sys
 
+import pwa_version
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 WEB = ROOT / "web"
@@ -94,6 +96,13 @@ MANIFEST = [
              why="the same bytes as a script, for file://"),
     Artifact("icon-180.png", why="the home-screen icon, for iOS"),
     Artifact("figures.html", why="the archive, drawn"),
+    Artifact("sw.js", why="the service worker; its V moves with the shell"),
+    Artifact("pwa.js", why="registers it, and the tap-to-update tag"),
+    Artifact("pullToRefresh.js", why="a reload gesture for the installed app"),
+    Artifact("manifest.json", why="installability, for Android"),
+    Artifact("icon-192.png", why="the manifest's icons"),
+    Artifact("icon-512.png", why="the manifest's icons, and the maskable one"),
+    Artifact("og.png", why="the share card a link preview shows"),
 ]
 # figures.json was here for a week, and it moved every night: a 250 KB commit and a
 # push from the capture host to republish a page about data that only exists on that
@@ -103,12 +112,22 @@ MANIFEST = [
 # allowlist nothing consults: it would have gone stale in the origin with every
 # test still green, because no test would have had a reason to read it.
 FIX = {"model.json": "src/fit.py", "model.js": "src/fit.py",
-       "icon-180.png": "src/make_icon.py"}
+       "icon-180.png": "src/make_icon.py", "icon-192.png": "src/make_icon.py",
+       "icon-512.png": "src/make_icon.py", "og.png": "src/make_og.sh",
+       "sw.js": "src/pwa_version.py"}
 
 
 def check() -> list[tuple[Artifact, str]]:
-    """Every artifact whose state is not `ok`."""
-    return [(a, s) for a in MANIFEST if (s := a.state()) != "ok"]
+    """Every artifact whose state is not `ok`.
+
+    sw.js is stale when the shell it precaches moved and its V did not: installed
+    copies would keep the old files. Reported only once nothing else is wrong,
+    because a missing or stale file is what moved the shell, and fixing it comes first.
+    """
+    bad = [(a, s) for a in MANIFEST if (s := a.state()) != "ok"]
+    if not bad and pwa_version.moved(WEB):
+        bad.append((next(a for a in MANIFEST if a.name == "sw.js"), "stale"))
+    return bad
 
 
 def publish(dry_run: bool = False) -> list[str]:
@@ -124,6 +143,9 @@ def publish(dry_run: bool = False) -> list[str]:
             if not dry_run:
                 a.path.write_text(want)
             moved.append(a.name)
+    # A moved model.js is a moved shell, and phones only refetch it under a new V.
+    if not dry_run and all(a.path.exists() for a in MANIFEST) and pwa_version.sync(WEB):
+        moved.append("sw.js")
     return moved
 
 
@@ -175,7 +197,7 @@ def report() -> None:
     for a in MANIFEST:
         s = a.state()
         size = f"{a.path.stat().st_size / 1024:7.1f} KB" if a.path.exists() else "  absent"
-        print(f"  {a.name:12s} {size}  {s:9s} {a.why}")
+        print(f"  {a.name:16s} {size}  {s:9s} {a.why}")
 
 
 def main() -> None:

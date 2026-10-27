@@ -377,6 +377,10 @@ ALLOWED_HOSTS = {
     "mini.tail8b0808.ts.net": ("the three things a browser cannot fetch -- the skip "
                                "set, the archiver's heartbeat, and today's score; "
                                "tailnet only, and the board degrades without it"),
+    # Not a dependency: the board's own origin, written out only in the share card's
+    # <meta> tags, because link-preview scrapers reject a relative og:image or og:url.
+    # Nothing on the page fetches it.
+    "jsundram.github.io": "the board's own address, for the share card's metadata",
 }
 
 
