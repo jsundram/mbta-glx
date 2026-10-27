@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// pwa-starter: scripts/sw.test.mjs @ af148d7
+// pwa-starter: sw.test.mjs @ af148d7
 // Behavioral tests for web/sw.js's fetch handler — the offline / "lie-fi" contract that this file
 // exists to hold. sw.js is dense with invariant-carrying prose; this is the executable half.
 //

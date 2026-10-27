@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pwa-starter: scripts/make-og.sh @ af148d7
+# Adapted from pwa-starter's scripts/make-og.sh (af148d7); not a stamped copy, since check-downstream.py does not track that script.
 # Rasterize the share card src/og.svg -> web/og.png (1200x630). The OG image MUST be a raster served
 # at an ABSOLUTE https URL (iMessage/WhatsApp/Slack reject relative paths and won't render SVG), and
 # must be compressed -- this script hard-fails if the card lands over MAX_BYTES (below), a margin
