@@ -38,6 +38,9 @@ TRIPS = {"77745376", "77745399"}
 AS_OF = 1790281459.0
 
 
+POLL_S = 0.01   # serve_forever's poll_interval in the fixtures below
+
+
 @pytest.fixture
 def live(monkeypatch):
     """The handler on a real port, with every network call stubbed out."""
@@ -47,7 +50,9 @@ def live(monkeypatch):
     # HTTPServer, not ThreadingHTTPServer: production is single-threaded, and a
     # threaded fixture would hide exactly the serialisation this has to preserve.
     httpd = HTTPServer(("127.0.0.1", 0), server.Handler)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    # shutdown() waits for serve_forever's next poll, and the default is 0.5 s:
+    # that wait was most of this file's runtime.
+    threading.Thread(target=httpd.serve_forever, args=(POLL_S,), daemon=True).start()
     yield httpd.server_address[1]
     httpd.shutdown()
     httpd.server_close()          # or every fixture use leaks a listening socket
@@ -102,8 +107,11 @@ def test_an_unknown_route_is_not_reachable_cross_origin(live):
     assert "Access-Control-Allow-Origin" not in headers
 
 
-def test_every_route_that_sends_cors_is_on_the_allowlist(live):
+def test_every_route_that_sends_cors_is_on_the_allowlist(live, monkeypatch):
     """Walk the real surface rather than trusting the one grep above it."""
+    # Headers are the question here, not scores: /history replays ten days of the
+    # real archive, which was 1.5 s of this test.
+    monkeypatch.setattr(server.replay, "score", lambda *a, **k: [])
     for path in ("/skips", "/capture", "/today", "/api", "/status", "/history",
                  "/board", "/", "/nope"):
         _, headers, _ = get(live, path)
@@ -301,7 +309,7 @@ def test_status_sh_checks_exactly_the_routes_the_server_allowlists():
 def public():
     """The public handler on its own port, as `tailscale serve` mounts it."""
     srv = HTTPServer(("127.0.0.1", 0), server.PublicHandler)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, args=(POLL_S,), daemon=True).start()
     yield srv.server_address[1]
     srv.shutdown()
 

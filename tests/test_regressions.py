@@ -502,12 +502,15 @@ def test_the_store_actually_contains_unresolved_predictions():
     files = sorted(glob.glob(str(ROOT_DIR / "data" / "pairs" / "*.parquet")))
     if not files:
         pytest.skip("no rolled-up days on this machine")
-    d = pl.concat([pl.read_parquet(f) for f in files])
-    m = d.filter((pl.col("stop") == "70508") & (pl.col("dir") == 0))
-    unpaired = m.filter(pl.col("actual_arr").is_null()).height
+    # Lazily, so only the three filtered columns are read: concatenating every
+    # rolled-up day whole was 3 s and grows by a day every night.
+    total, unpaired = (pl.scan_parquet(files)
+                       .filter((pl.col("stop") == "70508") & (pl.col("dir") == 0))
+                       .select(pl.len(), pl.col("actual_arr").is_null().sum())
+                       .collect().row(0))
     assert unpaired > 0, (
         "no unresolved predictions at Magoun inbound: either every predicted train "
         "arrived, or rollup is dropping them again. Re-roll with --force.")
     # Measured 3.7% at this stop. An order of magnitude more means the arrival
     # detection has broken, not that the trains stopped coming.
-    assert unpaired / m.height < 0.25, f"{unpaired}/{m.height} unresolved is too many"
+    assert unpaired / total < 0.25, f"{unpaired}/{total} unresolved is too many"

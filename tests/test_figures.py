@@ -5,6 +5,7 @@ the archive is gitignored and the failures below have nothing to do with which d
 you run them on. The one test that does need real data says so and skips.
 """
 import gzip
+import itertools
 import json
 import pathlib
 import re
@@ -237,9 +238,14 @@ def test_the_corridor_is_about_as_long_as_it_is():
     assert m[lech] > (m[-1] - m[lech]), "the GLX half should be the longer one"
 
 
-def test_both_axes_are_published():
+def test_both_axes_are_published(monkeypatch):
     if not figures.STOPS_REF.exists():
         pytest.skip("no cached stop coordinates on this machine")
+    # The axes come from the corridor and the cached coordinates, not from any
+    # day's trains, so the diagrams themselves are stubbed: building them read a
+    # whole archived day and LAMP, 6 s to check two keys per stop.
+    monkeypatch.setattr(figures, "marey", lambda *a, **k: {"days": []})
+    monkeypatch.setattr(figures, "heat", lambda *a, **k: {})
     fig = figures.build(marey_days=1, heat_days=1)
     assert all("y" in s and "m" in s for s in fig["stops"]), \
         "a stop is missing one of the two y axes"
@@ -352,13 +358,20 @@ def test_the_daily_run_rebuilds_it():
         "the heatmap reads data/raw, which only fetch_history.py fills"
 
 
-def test_the_corridor_is_in_the_order_the_archive_walks_it():
+def test_the_corridor_is_in_the_order_the_archive_walks_it(monkeypatch):
     """The one check that needs the real archive: the hardcoded corridor order has
     to match the order trains actually pass the stations."""
     days = figures.archives()
     if not days:
         pytest.skip("no archive on this machine")
     day, path = sorted(days.items())[-1]
+    # Up to the morning peak only. The newest day is usually today's, still being
+    # written, so reading all of it made this test slower by the hour -- 4.7 s by
+    # the evening -- and the peak alone carries dozens of full inbound runs.
+    cutoff = figures.midnight(day) + 9 * 3600
+    snapshots = figures.rollup._snapshots
+    monkeypatch.setattr(figures.rollup, "_snapshots", lambda p: itertools.takewhile(
+        lambda s: s["t"] < cutoff, snapshots(p)))
     runs = figures.runs(figures.arrivals(path), day)
     inbound = [r for r in runs if r["d"] == 0 and len(r["p"]) >= 12]
     if not inbound:
